@@ -138,3 +138,16 @@ def relpath(root: str | Path, path: str | Path) -> str:
         return str(Path(path).resolve().relative_to(Path(root).resolve())).replace("\\", "/")
     except ValueError:
         return str(path).replace("\\", "/")
+
+
+def is_within(root: str | Path, candidate: str | Path) -> bool:
+    """True only if ``candidate`` resolves to a strict descendant of ``root``.
+
+    A lockfile is untrusted (it is shared between machines, like a freeze file),
+    so any path it supplies must stay confined under ``comfyui_root``. ``resolve``
+    collapses ``..`` and follows symlinks, so this rejects both traversal
+    (``../../x``) and absolute paths (``/etc/x``, ``C:\\x``). Used by both
+    ``unpack`` (before writing) and ``verify`` (before reading/hashing).
+    """
+    root_res = Path(root).resolve()
+    return root_res in Path(candidate).resolve().parents

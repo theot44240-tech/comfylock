@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .hashes import COMPUTABLE, compute
 from .model import Lockfile, Model
-from .scan import git, head_commit, is_git_repo
+from .scan import git, head_commit, is_git_repo, is_within
 
 
 @dataclass
@@ -109,15 +109,8 @@ def _safe_commit(commit: str) -> bool:
 
 
 def _within(root: Path, candidate: Path) -> bool:
-    """True only if ``candidate`` is a strict descendant of ``root``.
-
-    A lockfile is untrusted (it is shared between machines, like a freeze
-    file), so any path it supplies must be confined under ``comfyui_root``.
-    ``resolve`` collapses ``..`` and follows symlinks, so this rejects both
-    traversal (``../../x``) and absolute paths (``/etc/x``, ``C:\\x``).
-    """
-    root_res = root.resolve()
-    return root_res in candidate.resolve().parents
+    """Confine a lock-supplied path under ``root`` (see :func:`scan.is_within`)."""
+    return is_within(root, candidate)
 
 
 def unpack(

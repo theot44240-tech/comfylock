@@ -249,6 +249,64 @@ class UnpackPathSafetyTests(unittest.TestCase):
             self.assertTrue((root / "models/loras/ok.safetensors").exists())
 
 
+class VerifyPathSafetyTests(unittest.TestCase):
+    """A lockfile is untrusted; ``verify`` must not stat/hash a file outside the
+    root via a lock-supplied ``paths`` entry (absolute or ``../`` traversal)."""
+
+    def _lock_pointing_at(self, root_size_hash, bad_path):
+        size, sha = root_size_hash
+        return serialize.loads(json.dumps({"version": 1, "models": [{
+            "name": "nope.safetensors",
+            "paths": [{"path": bad_path}],
+            "size": size,
+            "hashes": [{"type": "SHA256", "hash": sha}]}]}))
+
+    def test_absolute_path_is_not_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "models").mkdir(parents=True)
+            secret = Path(td) / "secret.bin"
+            secret.write_bytes(b"topsecret" * 50)
+            # Lock's size+hash match the OUTSIDE file: if verify followed the
+            # absolute path it would wrongly report a match. Containment must
+            # instead report not-found.
+            lock = self._lock_pointing_at(
+                (secret.stat().st_size, compute(secret, "SHA256")), str(secret))
+            rep = verify(lock, root)
+            self.assertFalse(rep.passed)
+            self.assertIn("file not found", rep.render())
+
+    def test_traversal_path_is_not_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "models").mkdir(parents=True)
+            secret = Path(td) / "secret.bin"
+            secret.write_bytes(b"abc" * 100)
+            lock = self._lock_pointing_at(
+                (secret.stat().st_size, compute(secret, "SHA256")), "../../secret.bin")
+            rep = verify(lock, root)
+            self.assertFalse(rep.passed)
+            self.assertIn("file not found", rep.render())
+
+    def test_legit_in_root_fallback_path_is_verified(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            mdir = root / "models" / "checkpoints"
+            mdir.mkdir(parents=True)
+            f = mdir / "actual.safetensors"
+            f.write_bytes(b"weights" * 100)
+            # Model name's basename differs from the on-disk file, so the models
+            # glob does NOT find it; verify must fall back to the (in-root) lock
+            # path and still pass. Proves the guard doesn't reject legit paths.
+            lock = serialize.loads(json.dumps({"version": 1, "models": [{
+                "name": "renamed.safetensors",
+                "paths": [{"path": "models/checkpoints/actual.safetensors"}],
+                "size": f.stat().st_size,
+                "hashes": [{"type": "SHA256", "hash": compute(f, "SHA256")}]}]}))
+            rep = verify(lock, root)
+            self.assertTrue(rep.passed, rep.render())
+
+
 class UnpackGitSafetyTests(unittest.TestCase):
     """A lockfile is untrusted; node URLs/commits must not let it run commands.
 
