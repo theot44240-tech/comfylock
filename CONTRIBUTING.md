@@ -64,5 +64,6 @@ reproduces the problem, plus your OS and Python version, gets it fixed fastest.
 
 ## Code of conduct
 
-This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By
-participating you agree to uphold it.
+Be kind, be constructive, and assume good faith. Harassment, discrimination, and
+personal attacks aren't welcome here. Maintainers may remove comments, commits, or
+contributors that violate this.
