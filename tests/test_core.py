@@ -204,6 +204,51 @@ class UnpackTests(unittest.TestCase):
             self.assertEqual(res.errors, 1)
 
 
+class UnpackPathSafetyTests(unittest.TestCase):
+    """A lockfile is untrusted; ``unpack`` must never write outside the root."""
+
+    def _attempt(self, td, bad_path):
+        src = Path(td) / "src.safetensors"
+        src.write_bytes(b"payload" * 50)
+        root = Path(td) / "ComfyUI"
+        root.mkdir()
+        lock = Lockfile(models=[Model(
+            "evil", url=src.resolve().as_uri(), paths=[bad_path])])
+        return unpack(lock, root, dry_run=False), root
+
+    def test_traversal_path_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            res, root = self._attempt(td, "../../escaped.bin")
+            self.assertEqual(res.errors, 1, res.render())
+            self.assertIn("unsafe path", res.render())
+            # Nothing written above the root.
+            self.assertFalse((Path(td) / "escaped.bin").exists())
+            self.assertFalse((root.parent / "escaped.bin").exists())
+
+    def test_absolute_path_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "outside.bin"
+            res, _ = self._attempt(td, str(target))
+            self.assertEqual(res.errors, 1, res.render())
+            self.assertFalse(target.exists())
+
+    def test_dry_run_preview_flags_unsafe_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            root.mkdir()
+            lock = Lockfile(models=[Model(
+                "evil", url="file:///x", paths=["../../escaped.bin"])])
+            res = unpack(lock, root, dry_run=True)
+            self.assertEqual(res.errors, 1, res.render())
+            self.assertIn("unsafe path", res.render())
+
+    def test_legit_relative_path_still_downloads(self):
+        with tempfile.TemporaryDirectory() as td:
+            res, root = self._attempt(td, "models/loras/ok.safetensors")
+            self.assertEqual(res.errors, 0, res.render())
+            self.assertTrue((root / "models/loras/ok.safetensors").exists())
+
+
 class HashTypeValidationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

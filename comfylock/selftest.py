@@ -14,7 +14,9 @@ from pathlib import Path
 from . import serialize
 from .diff import diff as diff_locks
 from .hashes import HashCache, compute
+from .model import Lockfile, Model
 from .pack import build_lock
+from .unpack import unpack
 from .verify import verify
 
 
@@ -197,6 +199,26 @@ def run_selftest() -> int:
         c.check(
             loc.found["dup.safetensors"].parent.name == "a",
             "ambiguous match resolved deterministically",
+        )
+
+        # --- unpack confines writes to the root (untrusted lockfile) ---
+        src = Path(td) / "payload.bin"
+        src.write_bytes(b"x" * 64)
+        src_url = src.resolve().as_uri()
+        unpack_root = Path(td) / "unpack_root"
+        unpack_root.mkdir()
+        evil = Lockfile(models=[Model("evil", url=src_url, paths=["../../escaped.bin"])])
+        ev_res = unpack(evil, unpack_root, dry_run=False)
+        c.check(ev_res.errors >= 1, "unpack refuses path traversal")
+        c.check(
+            not (unpack_root.parent.parent / "escaped.bin").exists(),
+            "unpack writes nothing above the root",
+        )
+        good = Lockfile(models=[Model("ok", url=src_url, paths=["models/loras/ok.bin"])])
+        gd_res = unpack(good, unpack_root, dry_run=False)
+        c.check(
+            gd_res.errors == 0 and (unpack_root / "models/loras/ok.bin").exists(),
+            "unpack still writes safe relative paths",
         )
 
         # --- malformed lockfile yields a clean error, not a traceback ---

@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Nothing yet.
+### Security
+
+- `unpack` now confines all writes to the target ComfyUI root. A lockfile is
+  shared between machines and therefore untrusted; previously a crafted entry
+  with a `path` containing `..` or an absolute path could make `unpack --apply`
+  write a downloaded file (or clone a node) outside the root. Such entries are
+  now refused with an `unsafe path` error and skipped; safe relative paths are
+  unaffected. Covered by new tests and a `selftest` check.
 
 ## [0.2.0] - 2026-06-21
 

@@ -84,6 +84,18 @@ def _node_dir_for(root: Path, url: str) -> Path:
     return root / "custom_nodes" / name
 
 
+def _within(root: Path, candidate: Path) -> bool:
+    """True only if ``candidate`` is a strict descendant of ``root``.
+
+    A lockfile is untrusted (it is shared between machines, like a freeze
+    file), so any path it supplies must be confined under ``comfyui_root``.
+    ``resolve`` collapses ``..`` and follows symlinks, so this rejects both
+    traversal (``../../x``) and absolute paths (``/etc/x``, ``C:\\x``).
+    """
+    root_res = root.resolve()
+    return root_res in candidate.resolve().parents
+
+
 def unpack(
     lock: Lockfile,
     comfyui_root: str | Path,
@@ -96,6 +108,11 @@ def unpack(
     # --- Custom git nodes ---
     for url, commit in sorted(lock.git_nodes.items()):
         node_dir = _node_dir_for(root, url)
+        if not _within(root, node_dir):
+            result.actions.append(
+                Action("skip", url, "unsafe node path", error="unsafe path")
+            )
+            continue
         if not node_dir.exists():
             act = Action("clone", url, f"-> {node_dir} @ {commit[:10]}")
             if not dry_run:
@@ -123,7 +140,8 @@ def unpack(
 
 def _model_present(root: Path, m: Model) -> bool:
     for p in m.paths:
-        if (root / p).exists():
+        dest = root / p
+        if _within(root, dest) and dest.exists():
             return True
     # fall back to basename search under models/
     base = Path(m.name).name
@@ -139,6 +157,8 @@ def _plan_model(root: Path, m: Model) -> Action | None:
     if not m.url:
         return Action("skip", m.name, "no url in lock", error="no url")
     dest = m.paths[0] if m.paths else _default_dest(m)
+    if not _within(root, root / dest):
+        return Action("skip", m.name, f"unsafe path: {dest}", error="unsafe path")
     return Action("download", m.name, f"{m.url} -> {dest}")
 
 
@@ -166,9 +186,15 @@ def _do_download(root: Path, m: Model, act: Action) -> None:
         return
     url = m.url
     dest = root / (m.paths[0] if m.paths else _default_dest(m))
+    if not _within(root, dest):  # defense in depth; _plan_model already filters
+        act.error = "unsafe path"
+        return
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        urllib.request.urlretrieve(url, dest)  # noqa: S310 - url comes from a trusted lock
+        # file:// is intentional (offline/testing, see module docstring); the
+        # written path is confined to the root by _within above, and the result
+        # is integrity-checked against the lock's hash below.
+        urllib.request.urlretrieve(url, dest)  # noqa: S310
     except Exception as exc:  # pragma: no cover - network dependent
         act.error = f"download failed: {exc}"
         return

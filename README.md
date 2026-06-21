@@ -208,6 +208,9 @@ belong behind extras. Add tests for new behavior and update `CHANGELOG.md`.
 - `unpack` downloads files from URLs recorded in the lock and **runs git clone /
   checkout** against the listed repositories. Only run `unpack --apply` on locks
   from sources you trust, and review a lock before applying it.
+- `unpack` confines every write to the ComfyUI root you pass with `-r`. Lock
+  entries whose `path` escapes the root (via `..` or an absolute path) are
+  refused with an `unsafe path` error and skipped.
 - Every downloaded model is hash-checked against the lock; a mismatch is
   reported as an error and the file is left in place for inspection.
 - ComfyLock never executes workflow or custom-node code; it only reads files,
