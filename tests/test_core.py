@@ -166,12 +166,48 @@ class DiffTests(unittest.TestCase):
 
 class UnpackTests(unittest.TestCase):
     def test_dry_run_lists_download(self):
-        lock = Lockfile(models=[Model("m.safetensors", url="https://h/m.safetensors")])
+        lock = Lockfile(models=[Model(
+            "m.safetensors", url="https://h/m.safetensors",
+            hashes=[Hash("SHA256", "0" * 64)])])
         with tempfile.TemporaryDirectory() as td:
             res = unpack(lock, td, dry_run=True)
             self.assertEqual(len(res.actions), 1)
             self.assertEqual(res.actions[0].kind, "download")
             self.assertFalse(res.actions[0].done)
+
+    def test_unverifiable_download_is_refused(self):
+        # A lock that gives a URL but no recomputable hash must not be fetched:
+        # the download would be unverifiable and land in the models tree
+        # unchecked. Both the dry-run preview and the apply must fail clean.
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.safetensors"
+            src.write_bytes(b"abc" * 100)
+            dest_rel = "models/checkpoints/src.safetensors"
+            lock = Lockfile(models=[Model(
+                "src.safetensors", url=src.resolve().as_uri(), paths=[dest_rel])])
+            root = Path(td) / "ComfyUI"
+            root.mkdir()
+            preview = unpack(lock, root, dry_run=True)
+            self.assertEqual(preview.errors, 1, preview.render())
+            self.assertIn("hash", preview.render().lower())
+            res = unpack(lock, root, dry_run=False)
+            self.assertEqual(res.errors, 1, res.render())
+            self.assertFalse((root / dest_rel).exists())
+
+    def test_hash_mismatch_removes_downloaded_file(self):
+        # On mismatch the (untrusted) bytes must be removed, not left on disk.
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.safetensors"
+            src.write_bytes(b"abc" * 100)
+            dest_rel = "models/checkpoints/src.safetensors"
+            lock = Lockfile(models=[Model(
+                "src.safetensors", url=src.resolve().as_uri(),
+                paths=[dest_rel], hashes=[Hash("SHA256", "0" * 64)])])
+            root = Path(td) / "ComfyUI"
+            root.mkdir()
+            res = unpack(lock, root, dry_run=False)
+            self.assertEqual(res.errors, 1, res.render())
+            self.assertFalse((root / dest_rel).exists())
 
     def test_local_file_download_and_verify(self):
         with tempfile.TemporaryDirectory() as td:
@@ -212,8 +248,11 @@ class UnpackPathSafetyTests(unittest.TestCase):
         src.write_bytes(b"payload" * 50)
         root = Path(td) / "ComfyUI"
         root.mkdir()
+        # A valid hash so a *legit* path actually downloads+verifies; an unsafe
+        # path is still refused at plan time, before any download is attempted.
         lock = Lockfile(models=[Model(
-            "evil", url=src.resolve().as_uri(), paths=[bad_path])])
+            "evil", url=src.resolve().as_uri(), paths=[bad_path],
+            hashes=[Hash("SHA256", compute(src, "SHA256"))])])
         return unpack(lock, root, dry_run=False), root
 
     def test_traversal_path_is_refused(self):
@@ -531,7 +570,8 @@ class UnpackDestTests(unittest.TestCase):
 
     def test_dry_run_dest_reflects_type(self):
         lock = Lockfile(models=[Model(
-            "cn.safetensors", url="https://h/cn.safetensors", type="controlnet")])
+            "cn.safetensors", url="https://h/cn.safetensors", type="controlnet",
+            hashes=[Hash("SHA256", "0" * 64)])])
         with tempfile.TemporaryDirectory() as td:
             res = unpack(lock, td, dry_run=True)
             self.assertIn("models/controlnet/cn.safetensors", res.render())

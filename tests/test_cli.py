@@ -102,7 +102,8 @@ class CliTests(unittest.TestCase):
                 "version": 1,
                 "models": [{"name": "m.safetensors",
                             "url": "https://example/m.safetensors",
-                            "paths": [{"path": "models/checkpoints/m.safetensors"}]}],
+                            "paths": [{"path": "models/checkpoints/m.safetensors"}],
+                            "hashes": [{"type": "SHA256", "hash": "0" * 64}]}],
             }))
             r = run(["unpack", str(lock), "-r", str(root)])
             self.assertEqual(r.returncode, 0, r.stderr)

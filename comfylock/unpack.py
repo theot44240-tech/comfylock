@@ -108,6 +108,11 @@ def _safe_commit(commit: str) -> bool:
     return bool(_COMMIT_RE.match(commit))
 
 
+def _verifiable_ht(m: Model) -> str | None:
+    """First hash type in the lock we can recompute locally, or None."""
+    return next((ht for ht in COMPUTABLE if m.hash_of(ht)), None)
+
+
 def _within(root: Path, candidate: Path) -> bool:
     """Confine a lock-supplied path under ``root`` (see :func:`scan.is_within`)."""
     return is_within(root, candidate)
@@ -186,6 +191,15 @@ def _plan_model(root: Path, m: Model) -> Action | None:
     dest = m.paths[0] if m.paths else _default_dest(m)
     if not _within(root, root / dest):
         return Action("skip", m.name, f"unsafe path: {dest}", error="unsafe path")
+    # Never auto-fetch what we can't verify. An untrusted lock that supplies a
+    # URL but no recomputable hash would have its download accepted with zero
+    # integrity guarantee -- a MITM or a swapped artifact goes undetected -- and
+    # the bytes would land in the models tree, where ComfyUI loads them (and a
+    # later run would treat the model as already satisfied). Fail clean instead.
+    # (`pack` always records a SHA256 for present models, so locks produced by
+    # this tool are unaffected; this only blocks hand-authored/imported locks.)
+    if _verifiable_ht(m) is None:
+        return Action("skip", m.name, "no verifiable hash in lock", error="no hash")
     return Action("download", m.name, f"{m.url} -> {dest}")
 
 
@@ -220,6 +234,10 @@ def _do_download(root: Path, m: Model, act: Action) -> None:
     if not _within(root, dest):  # defense in depth; _plan_model already filters
         act.error = "unsafe path"
         return
+    ht = _verifiable_ht(m)
+    if ht is None:  # defense in depth; _plan_model already refuses no-hash locks
+        act.error = "no verifiable hash in lock"
+        return
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         # file:// is intentional (offline/testing, see module docstring); the
@@ -230,12 +248,13 @@ def _do_download(root: Path, m: Model, act: Action) -> None:
         act.error = f"download failed: {exc}"
         return
     # Integrity check against the first recomputable hash in the lock.
-    for ht in COMPUTABLE:
-        expected = m.hash_of(ht)
-        if expected:
-            actual = compute(dest, ht)
-            if actual != expected:
-                act.error = f"hash mismatch after download ({ht})"
-                return
-            break
+    if compute(dest, ht) != m.hash_of(ht):
+        # Don't leave unverified bytes where ComfyUI would load them, or where a
+        # later run's basename search would treat the model as already present.
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        act.error = f"hash mismatch after download ({ht})"
+        return
     act.done = True
