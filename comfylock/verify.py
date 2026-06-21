@@ -11,6 +11,7 @@ from .scan import (
     LocatedModels,
     head_commit,
     is_git_repo,
+    is_within,
     locate_models,
     relpath,
     scan_comfyui_commit,
@@ -97,8 +98,12 @@ def verify(
             continue
         path = located.found.get(m.name)
         if path is None and m.paths and root:
+            # ``m.paths`` comes from the untrusted lockfile; confine the fallback
+            # to the ComfyUI root so a malicious lock can't make verify stat/hash
+            # an arbitrary absolute or ``../`` path (file-existence / content
+            # oracle, or a hang on a device file). ``unpack`` confines the same way.
             cand = root / m.paths[0]
-            path = cand if cand.exists() else None
+            path = cand if (is_within(root, cand) and cand.exists()) else None
         if path is None or not path.exists():
             report.error(f"Model '{m.name}': file not found.")
             continue
