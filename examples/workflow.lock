@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "workflow": "workflow.flow.json",
+  "generated": "2026-06-21T12:00:00Z",
+  "comfyui": "0b3e9f1a2c4d6e8f0a1b2c3d4e5f60718293a4b5",
+  "custom_nodes": {
+    "git": {
+      "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git": "9d2a1c3b4e5f60718293a4b5c6d7e8f90a1b2c3d"
+    },
+    "files": [
+      { "filename": "my_inline_node.py", "disabled": false }
+    ]
+  },
+  "models": [
+    {
+      "name": "detail_tweaker_xl.safetensors",
+      "url": "https://civitai.com/api/download/models/135867",
+      "paths": [ { "path": "models/loras/detail_tweaker_xl.safetensors" } ],
+      "hashes": [
+        { "type": "SHA256", "hash": "7d5f3a1b2c4d6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f6071" },
+        { "type": "AutoV2", "hash": "7d5f3a1b2c" }
+      ],
+      "type": "lora",
+      "size": 87654321
+    },
+    {
+      "name": "sd_xl_base_1.0.safetensors",
+      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+      "paths": [ { "path": "models/checkpoints/sd_xl_base_1.0.safetensors" } ],
+      "hashes": [
+        { "type": "SHA256", "hash": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b" }
+      ],
+      "type": "diffuser",
+      "size": 6938040682
+    },
+    {
+      "name": "sdxl_vae.safetensors",
+      "url": "https://huggingface.co/stabilityai/sdxl-vae/resolve/main/sdxl_vae.safetensors",
+      "paths": [ { "path": "models/vae/sdxl_vae.safetensors" } ],
+      "hashes": [
+        { "type": "SHA256", "hash": "235745af8d86bf4a4c1b5b4f529868b37019a10f7c0b2e7f1b9b3a7c4e2d1f08" }
+      ],
+      "type": "vae",
+      "size": 334641162
+    }
+  ],
+  "parameters": {
+    "cfg": 7.0,
+    "denoise": 1.0,
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "karras",
+    "seed": 123456789,
+    "steps": 25
+  }
+}

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comfylock"
+version = "0.1.0"
+description = "Reproducibility lockfile for ComfyUI workflows - pip freeze for ComfyUI."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+authors = [{ name = "ComfyLock contributors" }]
+keywords = ["comfyui", "lockfile", "reproducibility", "stable-diffusion", "workflow"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/theot44240-tech/comfylock"
+Repository = "https://github.com/theot44240-tech/comfylock"
+Issues = "https://github.com/theot44240-tech/comfylock/issues"
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=5.1"]
+blake3 = ["blake3>=0.3"]
+dev = ["pytest>=7", "ruff>=0.1", "mypy>=1.0", "pyyaml>=5.1"]
+
+[project.scripts]
+comfy-lock = "comfylock.cli:main"
+comfylock = "comfylock.cli:main"
+
+[tool.setuptools]
+packages = ["comfylock"]
+
+[tool.setuptools.package-data]
+comfylock = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+ignore_missing_imports = true
+warn_unused_ignores = false

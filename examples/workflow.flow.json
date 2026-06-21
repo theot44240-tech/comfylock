@@ -1,0 +1,35 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "CheckpointLoaderSimple",
+      "widgets_values": ["sd_xl_base_1.0.safetensors"]
+    },
+    {
+      "id": 2,
+      "type": "LoraLoader",
+      "widgets_values": ["detail_tweaker_xl.safetensors", 0.8, 0.8]
+    },
+    {
+      "id": 3,
+      "type": "KSampler",
+      "inputs": [
+        {"name": "seed", "widget": {"value": 123456789}},
+        {"name": "steps", "widget": {"value": 25}},
+        {"name": "cfg", "widget": {"value": 7.0}},
+        {"name": "sampler_name", "widget": {"value": "dpmpp_2m"}},
+        {"name": "scheduler", "widget": {"value": "karras"}},
+        {"name": "denoise", "widget": {"value": 1.0}}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "VAELoader",
+      "widgets_values": ["sdxl_vae.safetensors"]
+    }
+  ],
+  "links": [],
+  "version": 0.4
+}

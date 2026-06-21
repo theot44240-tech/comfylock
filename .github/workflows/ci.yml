@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev tools
+        run: pip install ruff mypy
+      - name: Ruff
+        run: ruff check comfylock tests panel
+      - name: Mypy
+        run: mypy comfylock
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package
+        run: pip install -e .
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Self-test
+        run: python -m comfylock selftest
+      - name: Round-trip example
+        run: |
+          comfy-lock diff examples/workflow.lock examples/workflow.lock
