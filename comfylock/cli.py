@@ -65,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff = sub.add_parser("diff", help="Show semantic changes between two lockfiles.")
     p_diff.add_argument("old", help="Old lockfile.")
     p_diff.add_argument("new", help="New lockfile.")
+    p_diff.add_argument(
+        "--exit-code",
+        action="store_true",
+        help="Exit 1 when the lockfiles differ (for CI gating, like `git diff`).",
+    )
 
     sub.add_parser("selftest", help="Run the built-in self-test suite.")
 
@@ -125,7 +130,7 @@ def cmd_diff(args: argparse.Namespace) -> int:
     new = serialize.read(args.new)
     d = diff_locks(old, new)
     print(d.render())
-    return 0
+    return 1 if (args.exit_code and not d.empty) else 0
 
 
 def cmd_selftest(_args: argparse.Namespace) -> int:
@@ -149,9 +154,12 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        print("interrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

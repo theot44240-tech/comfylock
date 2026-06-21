@@ -49,6 +49,34 @@ class UnpackResult:
         return "\n".join(a.render() for a in self.actions)
 
 
+# Map a model's recorded ``type`` to its conventional ComfyUI models/ subdir so
+# downloads land where ComfyUI (and a later verify) will look for them.
+_TYPE_DIRS = {
+    "checkpoint": "checkpoints",
+    "diffuser": "checkpoints",
+    "diffusers": "checkpoints",
+    "lora": "loras",
+    "locon": "loras",
+    "vae": "vae",
+    "controlnet": "controlnet",
+    "control_net": "controlnet",
+    "clip": "clip",
+    "clip_vision": "clip_vision",
+    "unet": "unet",
+    "upscale": "upscale_models",
+    "upscale_model": "upscale_models",
+    "embedding": "embeddings",
+    "embeddings": "embeddings",
+    "gligen": "gligen",
+    "hypernetwork": "hypernetworks",
+}
+
+
+def _default_dest(m: Model) -> str:
+    sub = _TYPE_DIRS.get((m.type or "").lower(), "checkpoints")
+    return f"models/{sub}/{Path(m.name).name}"
+
+
 def _node_dir_for(root: Path, url: str) -> Path:
     name = url.rstrip("/").split("/")[-1]
     if name.endswith(".git"):
@@ -110,7 +138,7 @@ def _model_present(root: Path, m: Model) -> bool:
 def _plan_model(root: Path, m: Model) -> Action | None:
     if not m.url:
         return Action("skip", m.name, "no url in lock", error="no url")
-    dest = m.paths[0] if m.paths else f"models/checkpoints/{Path(m.name).name}"
+    dest = m.paths[0] if m.paths else _default_dest(m)
     return Action("download", m.name, f"{m.url} -> {dest}")
 
 
@@ -137,7 +165,7 @@ def _do_download(root: Path, m: Model, act: Action) -> None:
         act.error = "no url"
         return
     url = m.url
-    dest = root / (m.paths[0] if m.paths else f"models/checkpoints/{Path(m.name).name}")
+    dest = root / (m.paths[0] if m.paths else _default_dest(m))
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         urllib.request.urlretrieve(url, dest)  # noqa: S310 - url comes from a trusted lock

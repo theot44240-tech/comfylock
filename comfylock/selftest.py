@@ -159,6 +159,55 @@ def run_selftest() -> int:
         # --- diff of identical locks is empty ---
         c.check(diff_locks(lock, serialize.read(lock_path)).empty, "diff identical empty")
 
+        # --- reproducible pack via SOURCE_DATE_EPOCH ---
+        import os as _os
+
+        _os.environ["SOURCE_DATE_EPOCH"] = "1700000000"
+        try:
+            r1 = build_lock(env["workflow"], "wf.flow.json", root, hash_types=["SHA256"])
+            r2 = build_lock(env["workflow"], "wf.flow.json", root, hash_types=["SHA256"])
+            c.check(
+                serialize.dumps_json(r1) == serialize.dumps_json(r2),
+                "SOURCE_DATE_EPOCH makes pack byte-reproducible",
+            )
+            c.check(
+                r1.generated == "2023-11-14T22:13:20Z",
+                "SOURCE_DATE_EPOCH timestamp honoured",
+            )
+        finally:
+            _os.environ.pop("SOURCE_DATE_EPOCH", None)
+
+        # --- invalid hash type is rejected (not silently substituted) ---
+        try:
+            build_lock(env["workflow"], "wf", root, hash_types=["MD5"])
+            c.check(False, "unknown hash type rejected")
+        except RuntimeError:
+            c.check(True, "unknown hash type rejected")
+
+        # --- ambiguous model basename is detected deterministically ---
+        from .scan import locate_models
+
+        dup = Path(td) / "dupcheck"
+        (dup / "models" / "a").mkdir(parents=True)
+        (dup / "models" / "b").mkdir(parents=True)
+        (dup / "models" / "a" / "dup.safetensors").write_bytes(b"1")
+        (dup / "models" / "b" / "dup.safetensors").write_bytes(b"2")
+        loc = locate_models(dup, ["dup.safetensors"])
+        c.check("dup.safetensors" in loc.ambiguous, "ambiguous basename detected")
+        c.check(
+            loc.found["dup.safetensors"].parent.name == "a",
+            "ambiguous match resolved deterministically",
+        )
+
+        # --- malformed lockfile yields a clean error, not a traceback ---
+        bad = Path(td) / "bad.lock"
+        bad.write_text("{not valid json", encoding="utf-8")
+        try:
+            serialize.read(bad)
+            c.check(False, "malformed lockfile raises")
+        except RuntimeError:
+            c.check(True, "malformed lockfile raises")
+
     total = c.passed + c.failed
     print(f"selftest: {c.passed}/{total} checks passed.")
     return 0 if c.failed == 0 else 1

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import datetime as _dt
+import os
 from pathlib import Path
 from typing import Any
 
 from . import serialize
 from .hashes import COMPUTABLE, HashCache
-from .model import Hash, Lockfile, Model
+from .model import HASH_TYPES, Hash, Lockfile, Model
 from .scan import (
     locate_models,
     relpath,
@@ -19,7 +20,52 @@ from .workflow import extract_models, extract_params
 
 
 def _now_iso() -> str:
+    """UTC timestamp, honouring ``SOURCE_DATE_EPOCH`` for reproducible builds.
+
+    When ``SOURCE_DATE_EPOCH`` is set to a valid Unix time, two packs of the same
+    environment produce byte-identical lockfiles (useful in CI / diffing).
+    """
+    sde = os.environ.get("SOURCE_DATE_EPOCH")
+    if sde:
+        try:
+            ts = int(sde)
+        except ValueError:
+            pass
+        else:
+            return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _resolve_hash_types(hash_types: list[str] | None) -> list[str]:
+    """Validate requested hash types, returning canonical names.
+
+    Unknown types and known-but-unavailable types (e.g. BLAKE3 without the
+    optional package) raise a clear error instead of silently producing a
+    lockfile hashed with a different algorithm than the user asked for.
+    """
+    if not hash_types:
+        return ["SHA256"]
+    computable = {h.upper(): h for h in COMPUTABLE}
+    known = {h.upper() for h in HASH_TYPES}
+    resolved: list[str] = []
+    for h in hash_types:
+        key = h.upper()
+        if key in computable:
+            canon = computable[key]
+            if canon not in resolved:
+                resolved.append(canon)
+        elif key in known:
+            raise RuntimeError(
+                f"Hash type {h!r} is not available in this environment. "
+                "Install its optional dependency (e.g. `pip install comfylock[blake3]`)."
+            )
+        else:
+            raise RuntimeError(
+                f"Unknown hash type {h!r}. Valid types: {', '.join(COMPUTABLE)}."
+            )
+    return resolved
 
 
 def build_lock(
@@ -30,10 +76,7 @@ def build_lock(
     cache: HashCache | None = None,
 ) -> Lockfile:
     """Construct a Lockfile in memory. Pure-ish: only reads the filesystem."""
-    canonical = {h.upper(): h for h in COMPUTABLE}
-    hash_types = [canonical[h.upper()] for h in (hash_types or ["SHA256"]) if h.upper() in canonical]
-    if not hash_types:
-        hash_types = ["SHA256"]
+    hash_types = _resolve_hash_types(hash_types)
     cache = cache or HashCache()
 
     model_names = extract_models(workflow)
@@ -45,16 +88,15 @@ def build_lock(
         parameters=params,
     )
 
+    found: dict[str, Path] = {}
     if comfyui_root is not None:
         lock.comfyui = scan_comfyui_commit(comfyui_root)
         lock.git_nodes, lock.file_nodes = scan_custom_nodes(comfyui_root)
-        located = locate_models(comfyui_root, model_names)
-    else:
-        located = {}
+        found = locate_models(comfyui_root, model_names).found
 
     for name in model_names:
         m = Model(name=name)
-        path = located.get(name)
+        path = found.get(name)
         if path is not None and path.exists():
             m.present = True
             m.size = path.stat().st_size

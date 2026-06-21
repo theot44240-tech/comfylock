@@ -204,6 +204,138 @@ class UnpackTests(unittest.TestCase):
             self.assertEqual(res.errors, 1)
 
 
+class HashTypeValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        mdir = self.root / "models" / "checkpoints"
+        mdir.mkdir(parents=True)
+        (mdir / "m.safetensors").write_bytes(b"weights" * 100)
+        self.wf = {"nodes": [{"widgets_values": ["m.safetensors"]}]}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_unknown_hash_type_raises(self):
+        with self.assertRaises(RuntimeError):
+            build_lock(self.wf, "w.json", self.root, hash_types=["MD5"])
+
+    def test_known_types_are_recorded(self):
+        lock = build_lock(self.wf, "w.json", self.root, hash_types=["sha256", "AutoV2"])
+        m = lock.models[0]
+        self.assertIsNotNone(m.hash_of("SHA256"))
+        self.assertIsNotNone(m.hash_of("AutoV2"))
+
+    def test_duplicate_types_collapse(self):
+        lock = build_lock(self.wf, "w.json", self.root, hash_types=["SHA256", "sha256"])
+        self.assertEqual(len(lock.models[0].hashes), 1)
+
+
+class DeterminismTests(unittest.TestCase):
+    def test_source_date_epoch_reproducible(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            mdir = root / "models" / "checkpoints"
+            mdir.mkdir(parents=True)
+            (mdir / "m.safetensors").write_bytes(b"w" * 256)
+            wf = {"nodes": [{"widgets_values": ["m.safetensors"]}]}
+            os.environ["SOURCE_DATE_EPOCH"] = "1700000000"
+            try:
+                a = build_lock(wf, "w.json", root)
+                b = build_lock(wf, "w.json", root)
+            finally:
+                os.environ.pop("SOURCE_DATE_EPOCH", None)
+            self.assertEqual(serialize.dumps_json(a), serialize.dumps_json(b))
+            self.assertEqual(a.generated, "2023-11-14T22:13:20Z")
+
+
+class AmbiguousModelTests(unittest.TestCase):
+    def test_locate_reports_ambiguity_and_is_deterministic(self):
+        from comfylock.scan import locate_models
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "models" / "a").mkdir(parents=True)
+            (root / "models" / "b").mkdir(parents=True)
+            (root / "models" / "a" / "dup.safetensors").write_bytes(b"1")
+            (root / "models" / "b" / "dup.safetensors").write_bytes(b"2")
+            loc = locate_models(root, ["dup.safetensors"])
+            self.assertIn("dup.safetensors", loc.ambiguous)
+            self.assertEqual(loc.found["dup.safetensors"].parent.name, "a")
+
+    def test_verify_warns_on_ambiguity(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "models" / "a").mkdir(parents=True)
+            (root / "models" / "b").mkdir(parents=True)
+            (root / "models" / "a" / "dup.safetensors").write_bytes(b"same")
+            (root / "models" / "b" / "dup.safetensors").write_bytes(b"same")
+            wf = {"nodes": [{"widgets_values": ["dup.safetensors"]}]}
+            lock = build_lock(wf, "w.json", root)
+            rep = verify(lock, root)
+            self.assertGreaterEqual(rep.n_warnings, 1)
+            self.assertIn("several files", rep.render())
+
+
+class SchemaCompatTests(unittest.TestCase):
+    def test_verify_warns_on_newer_schema(self):
+        lock = Lockfile(version=999)
+        rep = verify(lock, None)
+        self.assertIn("newer than this tool", rep.render())
+
+
+class SerializeErrorTests(unittest.TestCase):
+    def test_malformed_json_raises_runtime_error(self):
+        with self.assertRaises(RuntimeError):
+            serialize.loads("{ not valid json")
+
+    def test_non_mapping_top_level_raises(self):
+        with self.assertRaises(RuntimeError):
+            serialize.loads("[1, 2, 3]")
+
+    def test_read_missing_file_raises_filenotfound(self):
+        with self.assertRaises(FileNotFoundError):
+            serialize.read("does-not-exist.lock")
+
+    def test_read_error_includes_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "bad.lock"
+            p.write_text("{oops", encoding="utf-8")
+            with self.assertRaises(RuntimeError) as ctx:
+                serialize.read(p)
+            self.assertIn("bad.lock", str(ctx.exception))
+
+    def test_read_workflow_bad_json_raises_runtime_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "wf.json"
+            p.write_text("{oops", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                serialize.read_workflow(p)
+
+
+class UnpackDestTests(unittest.TestCase):
+    def test_download_routes_by_type(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "lora.safetensors"
+            src.write_bytes(b"abc" * 10)
+            sha = compute(src, "SHA256")
+            lock = Lockfile(models=[Model(
+                "lora.safetensors", url=src.resolve().as_uri(), type="lora",
+                hashes=[Hash("SHA256", sha)])])
+            root = Path(td) / "ComfyUI"
+            root.mkdir()
+            res = unpack(lock, root, dry_run=False)
+            self.assertEqual(res.errors, 0, res.render())
+            self.assertTrue((root / "models/loras/lora.safetensors").exists())
+
+    def test_dry_run_dest_reflects_type(self):
+        lock = Lockfile(models=[Model(
+            "cn.safetensors", url="https://h/cn.safetensors", type="controlnet")])
+        with tempfile.TemporaryDirectory() as td:
+            res = unpack(lock, td, dry_run=True)
+            self.assertIn("models/controlnet/cn.safetensors", res.render())
+
+
 @unittest.skipUnless(_git_ok(), "git not available")
 class GitNodeTests(unittest.TestCase):
     def test_scan_records_node_commit(self):

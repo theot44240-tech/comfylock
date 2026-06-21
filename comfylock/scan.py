@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 from .model import FileNode
 
@@ -79,25 +80,45 @@ def scan_custom_nodes(root: str | Path) -> tuple[dict[str, str], list[FileNode]]
     return git_nodes, file_nodes
 
 
-def locate_models(root: str | Path, filenames: list[str]) -> dict[str, Path]:
+class LocatedModels(NamedTuple):
+    """Result of :func:`locate_models`.
+
+    ``found`` maps each requested filename to the chosen on-disk path.
+    ``ambiguous`` maps filenames whose basename matched more than one file to the
+    full (sorted) list of candidates, so callers can warn instead of silently
+    guessing.
+    """
+
+    found: dict[str, Path]
+    ambiguous: dict[str, list[Path]]
+
+
+def locate_models(root: str | Path, filenames: list[str]) -> LocatedModels:
     """Map each requested filename to an on-disk path under models/ (if found).
 
     Matching is by basename, so a workflow that references ``model.safetensors``
-    resolves regardless of which subfolder it lives in.
+    resolves regardless of which subfolder it lives in. When several files share
+    a basename the lexicographically smallest path is chosen *deterministically*
+    (so the same environment always produces the same lockfile) and the clash is
+    reported via ``ambiguous``.
     """
     root = Path(root)
     models_dir = root / "models"
-    index: dict[str, Path] = {}
+    index: dict[str, list[Path]] = {}
     if models_dir.is_dir():
-        for p in models_dir.rglob("*"):
+        for p in sorted(models_dir.rglob("*")):
             if p.is_file():
-                index.setdefault(p.name, p)
-    result: dict[str, Path] = {}
+                index.setdefault(p.name, []).append(p)
+    found: dict[str, Path] = {}
+    ambiguous: dict[str, list[Path]] = {}
     for fn in filenames:
-        base = Path(fn).name
-        if base in index:
-            result[fn] = index[base]
-    return result
+        candidates = index.get(Path(fn).name)
+        if not candidates:
+            continue
+        found[fn] = candidates[0]
+        if len(candidates) > 1:
+            ambiguous[fn] = candidates
+    return LocatedModels(found, ambiguous)
 
 
 def relpath(root: str | Path, path: str | Path) -> str:

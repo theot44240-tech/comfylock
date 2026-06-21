@@ -5,12 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from .hashes import COMPUTABLE, HashCache
-from .model import Lockfile, Model
+from .model import SCHEMA_VERSION, Lockfile, Model
 from .report import Report
 from .scan import (
+    LocatedModels,
     head_commit,
     is_git_repo,
     locate_models,
+    relpath,
     scan_comfyui_commit,
 )
 
@@ -33,6 +35,13 @@ def verify(
     report = Report()
     cache = cache or HashCache()
     root = Path(comfyui_root) if comfyui_root is not None else None
+
+    # --- Schema compatibility ---
+    if lock.version > SCHEMA_VERSION:
+        report.warn(
+            f"Lockfile schema v{lock.version} is newer than this tool "
+            f"(v{SCHEMA_VERSION}); some checks may be skipped. Upgrade comfylock."
+        )
 
     # --- ComfyUI core commit ---
     if lock.comfyui:
@@ -77,18 +86,30 @@ def verify(
             report.error(f"File node missing: {fn.filename}.")
 
     # --- Models ---
-    located = locate_models(root, [m.name for m in lock.models]) if root else {}
+    located = (
+        locate_models(root, [m.name for m in lock.models])
+        if root
+        else LocatedModels({}, {})
+    )
     for m in lock.models:
         if not m.present:
             report.warn(f"Model '{m.name}': not pinned (was missing at pack time).")
             continue
-        path = located.get(m.name)
+        path = located.found.get(m.name)
         if path is None and m.paths and root:
             cand = root / m.paths[0]
             path = cand if cand.exists() else None
         if path is None or not path.exists():
             report.error(f"Model '{m.name}': file not found.")
             continue
+        if m.name in located.ambiguous and root:
+            others = ", ".join(
+                relpath(root, p) for p in located.ambiguous[m.name] if p != path
+            )
+            report.warn(
+                f"Model '{m.name}': basename matches several files "
+                f"(verifying {relpath(root, path)}; also: {others})."
+            )
         if m.size is not None and path.stat().st_size != m.size:
             report.error(
                 f"Model '{m.name}': size {path.stat().st_size} != locked {m.size}."

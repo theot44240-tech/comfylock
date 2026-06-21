@@ -56,6 +56,44 @@ class CliTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0)
             self.assertIn("No differences", r.stdout)
 
+    def test_diff_exit_code(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            a = root / "a.lock"
+            b = root / "b.lock"
+            a.write_text(json.dumps({"version": 1, "parameters": {"steps": 20}}))
+            b.write_text(json.dumps({"version": 1, "parameters": {"steps": 50}}))
+            # without flag: exit 0 even when different
+            self.assertEqual(run(["diff", str(a), str(b)]).returncode, 0)
+            # with flag: exit 1 when different
+            self.assertEqual(run(["diff", str(a), str(b), "--exit-code"]).returncode, 1)
+            # with flag: exit 0 when identical
+            self.assertEqual(run(["diff", str(a), str(a), "--exit-code"]).returncode, 0)
+
+    def test_pack_unknown_hash_clean_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wf = root / "wf.flow.json"
+            wf.write_text(json.dumps({"nodes": []}))
+            r = run(["pack", str(wf), "-o", str(root / "wf.lock"), "--hash", "MD5"])
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("error:", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+
+    def test_verify_malformed_lock_clean_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            lock = Path(td) / "bad.lock"
+            lock.write_text("{ not valid")
+            r = run(["verify", str(lock)])
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("error:", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+
+    def test_missing_lock_clean_error(self):
+        r = run(["verify", "nope-does-not-exist.lock"])
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_unpack_dry_run(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -39,16 +39,32 @@ def dumps_yaml(lock: Lockfile) -> str:
     )
 
 
+def _require_mapping(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"expected a lockfile object at the top level, got {type(data).__name__}."
+        )
+    return data
+
+
 def loads(text: str) -> Lockfile:
     stripped = text.lstrip()
     if stripped.startswith("{"):
-        return Lockfile.from_dict(json.loads(text))
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"invalid JSON lockfile: {exc}") from exc
+        return Lockfile.from_dict(_require_mapping(data))
     if not _HAS_YAML:
         raise RuntimeError(
             "This lockfile looks like YAML but PyYAML is not installed. "
             "Install it (`pip install pyyaml`) or use a JSON lockfile."
         )
-    return Lockfile.from_dict(yaml.safe_load(text) or {})  # type: ignore[arg-type]
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:  # type: ignore[attr-defined]
+        raise RuntimeError(f"invalid YAML lockfile: {exc}") from exc
+    return Lockfile.from_dict(_require_mapping(data or {}))
 
 
 def write(lock: Lockfile, path: str | Path) -> Path:
@@ -63,9 +79,24 @@ def write(lock: Lockfile, path: str | Path) -> Path:
 
 def read(path: str | Path) -> Lockfile:
     p = Path(path)
-    return loads(p.read_text(encoding="utf-8"))
+    try:
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"lockfile not found: {p}") from exc
+    try:
+        return loads(text)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{p}: {exc}") from exc
 
 
 def read_workflow(path: str | Path) -> Any:
     """Load a ComfyUI workflow JSON (UI graph or API/prompt format)."""
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    p = Path(path)
+    try:
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"workflow not found: {p}") from exc
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{p}: invalid workflow JSON: {exc}") from exc
