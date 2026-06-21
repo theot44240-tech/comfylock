@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="560" viewBox="0 0 880 560" role="img" aria-label="Terminal showing comfy-lock pack, verify and unpack commands and their output">
+  <defs>
+    <linearGradient id="tbar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d333b"/><stop offset="1" stop-color="#22272e"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="864" height="544" rx="14" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="8" y="8" width="864" height="40" rx="14" fill="url(#tbar)"/>
+  <rect x="8" y="34" width="864" height="14" fill="#22272e"/>
+  <circle cx="34" cy="28" r="7" fill="#ff5f56"/>
+  <circle cx="58" cy="28" r="7" fill="#ffbd2e"/>
+  <circle cx="82" cy="28" r="7" fill="#27c93f"/>
+  <text x="440" y="33" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="14" fill="#768390">comfy-lock - pack . verify . unpack</text>
+
+  <g font-family="Consolas, Menlo, monospace" font-size="16">
+    <!-- pack -->
+    <text x="32" y="86"><tspan fill="#7ee787">$</tspan><tspan fill="#e6edf3"> comfy-lock pack my_workflow.flow.json -r ./ComfyUI</tspan></text>
+    <text x="32" y="110" fill="#8b949e">  -&gt; Wrote my_workflow.lock  (3 nodes, 2 models, 7 params)</text>
+
+    <!-- verify -->
+    <text x="32" y="156"><tspan fill="#7ee787">$</tspan><tspan fill="#e6edf3"> comfy-lock verify my_workflow.lock -r ./ComfyUI</tspan></text>
+    <text x="32" y="180"><tspan fill="#3fb950">  ok</tspan><tspan fill="#c9d1d9"> Node ComfyUI-Impact-Pack: 9d2a1c3b4e matches.</tspan></text>
+    <text x="32" y="204"><tspan fill="#f85149">  XX</tspan><tspan fill="#c9d1d9"> Model sd_xl_base_1.0.safetensors:</tspan></text>
+    <text x="32" y="228" fill="#c9d1d9">       expected SHA256=31e35c80fc.. got a1b2c3d4e5..</text>
+    <text x="32" y="252" fill="#d29922">  1 error(s), 0 warning(s), 6 check(s).</text>
+
+    <!-- unpack -->
+    <text x="32" y="298"><tspan fill="#7ee787">$</tspan><tspan fill="#e6edf3"> comfy-lock unpack my_workflow.lock -r ./ComfyUI --apply</tspan></text>
+    <text x="32" y="322" fill="#8b949e">  clone  ComfyUI-Impact-Pack @ 9d2a1c3b4e            ok</text>
+    <text x="32" y="346" fill="#8b949e">  fetch  sd_xl_base_1.0.safetensors  6.5 GB</text>
+    <text x="32" y="370" fill="#8b949e">  verify SHA256=31e35c80fc..                          ok</text>
+    <text x="32" y="394"><tspan fill="#3fb950">  done</tspan><tspan fill="#c9d1d9"> environment now matches the lock.</tspan></text>
+
+    <!-- diff -->
+    <text x="32" y="440"><tspan fill="#7ee787">$</tspan><tspan fill="#e6edf3"> comfy-lock diff v1.lock v2.lock</tspan></text>
+    <text x="32" y="464" fill="#58a6ff">  - Parameter steps: 25 -&gt; 40</text>
+    <text x="32" y="488" fill="#58a6ff">  - Model sd_xl_base hash: SHA256:31e3.. -&gt; SHA256:a1b2..</text>
+
+    <text x="32" y="528"><tspan fill="#7ee787">$</tspan><tspan fill="#e6edf3"> _</tspan></text>
+  </g>
+</svg>

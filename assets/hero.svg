@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="ComfyLock - pip freeze, but for ComfyUI workflows">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="0.55" stop-color="#13182230"/>
+      <stop offset="1" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#58a6ff"/>
+      <stop offset="1" stop-color="#7ee787"/>
+    </linearGradient>
+    <linearGradient id="lock" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7ee787"/>
+      <stop offset="1" stop-color="#58a6ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <rect width="1280" height="320" fill="#0d1117"/>
+  <rect width="1280" height="320" fill="url(#bg)" opacity="0.9"/>
+  <rect x="0" y="316" width="1280" height="4" fill="url(#accent)"/>
+
+  <!-- padlock -->
+  <g transform="translate(150,160)">
+    <circle r="96" fill="#161b22" stroke="#21262d" stroke-width="2"/>
+    <g transform="translate(-44,-52)">
+      <path d="M22 30 v-8 a22 22 0 0 1 44 0 v8" fill="none" stroke="url(#lock)" stroke-width="10" stroke-linecap="round"/>
+      <rect x="6" y="30" width="76" height="58" rx="12" fill="url(#lock)"/>
+      <circle cx="44" cy="56" r="9" fill="#0d1117"/>
+      <rect x="40" y="56" width="8" height="20" rx="4" fill="#0d1117"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="300" y="150" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="84" font-weight="800" fill="#f0f6fc">ComfyLock</text>
+  <text x="304" y="206" font-family="Consolas, Menlo, monospace" font-size="30" fill="#7ee787">pip freeze, but for ComfyUI workflows.</text>
+  <text x="304" y="252" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="22" fill="#8b949e">Pin node commits + model hashes + parameters into one tiny, verifiable .lock file.</text>
+
+  <!-- pills -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="18" font-weight="600">
+    <g transform="translate(304,278)">
+      <rect width="150" height="30" rx="15" fill="#1f6feb22" stroke="#1f6feb"/>
+      <text x="75" y="20" text-anchor="middle" fill="#58a6ff">Zero dependencies</text>
+    </g>
+    <g transform="translate(466,278)">
+      <rect width="118" height="30" rx="15" fill="#23863622" stroke="#238636"/>
+      <text x="59" y="20" text-anchor="middle" fill="#7ee787">Pure stdlib</text>
+    </g>
+    <g transform="translate(596,278)">
+      <rect width="158" height="30" rx="15" fill="#8957e522" stroke="#8957e5"/>
+      <text x="79" y="20" text-anchor="middle" fill="#d2a8ff">Linux . macOS . Win</text>
+    </g>
+  </g>
+</svg>
