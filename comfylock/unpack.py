@@ -6,6 +6,7 @@ Downloads use urllib, so ``file://`` URLs work for offline/testing scenarios.
 
 from __future__ import annotations
 
+import re
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,6 +85,29 @@ def _node_dir_for(root: Path, url: str) -> Path:
     return root / "custom_nodes" / name
 
 
+# A pinned commit is always a git object name: hex, 7-64 chars (sha1=40,
+# sha256=64). Refusing anything else stops an untrusted lock from smuggling an
+# option (e.g. a value starting with "-") into ``git checkout``.
+_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+# Standard git transports. ext::/fd:: remote helpers run arbitrary commands and
+# a leading "-" is an option-injection vector, so an untrusted lockfile's repo
+# URL must match one of these explicit forms before it is handed to ``git``.
+_URL_SCHEME_RE = re.compile(r"^(https?|git|ssh|file)://", re.IGNORECASE)
+_SCP_URL_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")
+
+
+def _safe_clone_url(url: str) -> bool:
+    """True if ``url`` is a transport we trust to pass to ``git clone``."""
+    if not url or url.startswith("-"):
+        return False
+    return bool(_URL_SCHEME_RE.match(url) or _SCP_URL_RE.match(url))
+
+
+def _safe_commit(commit: str) -> bool:
+    return bool(_COMMIT_RE.match(commit))
+
+
 def _within(root: Path, candidate: Path) -> bool:
     """True only if ``candidate`` is a strict descendant of ``root``.
 
@@ -107,6 +131,16 @@ def unpack(
 
     # --- Custom git nodes ---
     for url, commit in sorted(lock.git_nodes.items()):
+        if not _safe_clone_url(url):
+            result.actions.append(
+                Action("skip", url, "unsafe repo url", error="unsafe url")
+            )
+            continue
+        if not _safe_commit(commit):
+            result.actions.append(
+                Action("skip", url, f"unsafe commit ref: {commit}", error="unsafe commit")
+            )
+            continue
         node_dir = _node_dir_for(root, url)
         if not _within(root, node_dir):
             result.actions.append(
@@ -164,7 +198,9 @@ def _plan_model(root: Path, m: Model) -> Action | None:
 
 def _do_clone(url: str, node_dir: Path, commit: str, act: Action) -> None:
     node_dir.parent.mkdir(parents=True, exist_ok=True)
-    if git(["clone", url, str(node_dir)], node_dir.parent) is None:
+    # ``--`` ends option parsing so a URL can never be read as a git option
+    # (e.g. ``--upload-pack=<cmd>``); the caller has already allow-listed it.
+    if git(["clone", "--", url, str(node_dir)], node_dir.parent) is None:
         act.error = "clone failed"
         return
     _do_checkout(node_dir, commit, act)
@@ -174,7 +210,9 @@ def _do_checkout(node_dir: Path, commit: str, act: Action) -> None:
     if git(["fetch", "--all"], node_dir) is None:
         act.error = "fetch failed"
         return
-    if git(["checkout", commit], node_dir) is None:
+    # ``commit`` is hex-validated by the caller; ``--`` is belt-and-braces so it
+    # can never be parsed as an option or pathspec.
+    if git(["checkout", commit, "--"], node_dir) is None:
         act.error = f"checkout {commit[:10]} failed"
         return
     act.done = True

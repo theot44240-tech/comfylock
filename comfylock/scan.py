@@ -17,10 +17,22 @@ DEFAULT_COMFY_ROOTS = (
 
 
 def git(args: list[str], cwd: str | Path) -> str | None:
-    """Run a git command, returning stripped stdout or None on any failure."""
+    """Run a git command, returning stripped stdout or None on any failure.
+
+    ``ext::`` and ``fd::`` are git "remote helper" transports that execute an
+    arbitrary command. A lockfile is untrusted input, so we disable them for
+    *every* git call as defense in depth (``unpack`` also validates URLs before
+    they reach ``clone``). Standard transports (https/git/ssh/file) are
+    unaffected, so this does not change behaviour for legitimate repos.
+    """
     try:
         out = subprocess.run(
-            ["git", *args],
+            [
+                "git",
+                "-c", "protocol.ext.allow=never",
+                "-c", "protocol.fd.allow=never",
+                *args,
+            ],
             cwd=str(cwd),
             capture_output=True,
             text=True,

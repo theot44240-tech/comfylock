@@ -249,6 +249,68 @@ class UnpackPathSafetyTests(unittest.TestCase):
             self.assertTrue((root / "models/loras/ok.safetensors").exists())
 
 
+class UnpackGitSafetyTests(unittest.TestCase):
+    """A lockfile is untrusted; node URLs/commits must not let it run commands.
+
+    ``git`` has remote-helper transports (``ext::``, ``fd::``) and options
+    (``--upload-pack=``) that execute arbitrary commands, so ``unpack`` must
+    refuse anything that is not a standard transport + hex commit *before* it
+    reaches ``git clone``/``git checkout``.
+    """
+
+    def _root(self, td):
+        root = Path(td) / "ComfyUI"
+        root.mkdir()
+        return root
+
+    def test_ext_scheme_url_is_refused_and_runs_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td)
+            marker = Path(td) / "pwned"
+            lock = Lockfile(git_nodes={f"ext::sh -c touch {marker}": "a" * 40})
+            res = unpack(lock, root, dry_run=False)
+            self.assertGreaterEqual(res.errors, 1, res.render())
+            self.assertIn("unsafe url", res.render())
+            self.assertFalse(marker.exists())
+
+    def test_dash_leading_url_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td)
+            lock = Lockfile(git_nodes={"--upload-pack=touch x": "b" * 40})
+            res = unpack(lock, root, dry_run=False)
+            self.assertGreaterEqual(res.errors, 1, res.render())
+            self.assertIn("unsafe url", res.render())
+
+    def test_non_hex_commit_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td)
+            lock = Lockfile(
+                git_nodes={"https://github.com/a/b.git": "--evil-ref"})
+            res = unpack(lock, root, dry_run=False)
+            self.assertGreaterEqual(res.errors, 1, res.render())
+            self.assertIn("unsafe commit", res.render())
+
+    def test_dry_run_preview_flags_unsafe_url(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td)
+            lock = Lockfile(git_nodes={"ext::sh -c id": "c" * 40})
+            res = unpack(lock, root, dry_run=True)
+            self.assertGreaterEqual(res.errors, 1, res.render())
+            self.assertIn("unsafe url", res.render())
+
+    def test_legit_https_and_hex_commit_pass_validation(self):
+        # A standard transport + hex commit is previewed as a clone with no error
+        # (dry run, so no network); proves the guard does not reject real repos.
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td)
+            lock = Lockfile(
+                git_nodes={"https://github.com/example/Node.git": "d" * 40})
+            res = unpack(lock, root, dry_run=True)
+            self.assertEqual(res.errors, 0, res.render())
+            self.assertEqual(len(res.actions), 1)
+            self.assertEqual(res.actions[0].kind, "clone")
+
+
 class HashTypeValidationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
