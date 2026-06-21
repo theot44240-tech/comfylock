@@ -398,6 +398,58 @@ class VerifyFileNodeSafetyTests(unittest.TestCase):
             self.assertIn("File node present: my_node.py", rep.render())
 
 
+class VerifyGitNodeSafetyTests(unittest.TestCase):
+    """A lockfile is untrusted; a git-node URL must not let ``verify`` probe a
+    path outside the root. ``_node_dir_for`` uses the URL's last path segment as
+    a directory name -- ``..`` maps to the root itself, and on Windows a UNC/
+    rooted segment (``\\\\attacker\\share``) escapes ``custom_nodes`` entirely,
+    so an unconfined ``.exists()`` becomes an existence oracle / NTLM-leak / DoS.
+    ``unpack`` already confines this path; ``verify`` must too."""
+
+    def _lock_with_gitnode(self, url):
+        return serialize.loads(json.dumps({"version": 1, "custom_nodes": {
+            "git": {url: "a" * 40}}}))
+
+    def test_dotdot_url_segment_maps_outside_and_is_not_probed(self):
+        # Last segment ``..`` -> custom_nodes/.. == root, i.e. outside the
+        # intended custom_nodes/<name>. Must be reported missing, not probed
+        # (no ``is_git_repo`` on the root, no phantom "not a git repo" warning).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "custom_nodes").mkdir(parents=True)
+            rep = verify(self._lock_with_gitnode("https://e/x/.."), root)
+            self.assertFalse(rep.passed)
+            self.assertIn("Node missing", rep.render())
+            self.assertNotIn("not a git repo", rep.render())
+            self.assertNotIn("matches", rep.render())
+
+    def test_unc_like_url_segment_is_not_probed(self):
+        # On Windows this escapes custom_nodes via a UNC absolute path; on POSIX
+        # the backslashes are ordinary chars so it stays in-root but missing.
+        # Either way the outcome must be "missing", never a remote-share probe.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "custom_nodes").mkdir(parents=True)
+            rep = verify(
+                self._lock_with_gitnode("https://e/x/" + "\\\\attacker\\share"),
+                root,
+            )
+            self.assertIn("Node missing", rep.render())
+            self.assertNotIn("matches", rep.render())
+
+    def test_legit_git_node_dir_is_still_checked(self):
+        # A normal https URL maps to custom_nodes/<name> inside the root; the
+        # guard must not over-block it. The dir exists but is not a git repo, so
+        # verify reaches it and warns -- proving it looked inside the root.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "custom_nodes" / "MyNode").mkdir(parents=True)
+            rep = verify(
+                self._lock_with_gitnode("https://github.com/a/MyNode.git"), root)
+            self.assertIn("MyNode", rep.render())
+            self.assertNotIn("Node missing", rep.render())
+
+
 class UnpackGitSafetyTests(unittest.TestCase):
     """A lockfile is untrusted; node URLs/commits must not let it run commands.
 

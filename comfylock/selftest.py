@@ -235,6 +235,19 @@ def run_selftest() -> int:
             "unpack refuses an unverifiable (hash-less) download",
         )
 
+        # --- verify confines untrusted git-node URLs to the root ---
+        # A node URL's last path segment becomes a directory name; ``..`` (or a
+        # UNC/rooted segment on Windows) must not let verify probe outside
+        # custom_nodes/ (existence oracle / NTLM leak). Reported missing instead.
+        vroot = Path(td) / "verify_root"
+        (vroot / "custom_nodes").mkdir(parents=True)
+        escaped = Lockfile(git_nodes={"https://e/x/..": "a" * 40})
+        vrep = verify(escaped, vroot)
+        c.check(
+            "Node missing" in vrep.render() and "not a git repo" not in vrep.render(),
+            "verify refuses an out-of-root git-node path",
+        )
+
         # --- malformed lockfile yields a clean error, not a traceback ---
         bad = Path(td) / "bad.lock"
         bad.write_text("{not valid json", encoding="utf-8")
