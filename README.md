@@ -518,8 +518,8 @@ mypy comfylock
 5. 🚀 Open a PR — green CI on all three OSes is the merge bar.
 
 New contributors are genuinely welcome — small fixes, docs, and platform reports all count.
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide, and please read our
-**[Code of Conduct](CODE_OF_CONDUCT.md)** before participating.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide. Be kind, constructive,
+and assume good faith — harassment or personal attacks aren't welcome here.
 
 ---
 
