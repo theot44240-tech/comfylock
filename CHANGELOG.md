@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write a downloaded file (or clone a node) outside the root. Such entries are
   now refused with an `unsafe path` error and skipped; safe relative paths are
   unaffected. Covered by new tests and a `selftest` check.
+- `verify` now confines a lockfile's custom-node URLs to the ComfyUI root before
+  probing them. The directory checked for each git node is derived from the
+  URL's last path segment, which is untrusted; on Windows that segment can be a
+  UNC or rooted path (e.g. `\\attacker\share`) that escapes `custom_nodes`, so an
+  unconfined existence check could leak NTLM credentials, hang on a remote share
+  (DoS), or act as a file-existence oracle, and `..` could probe the root itself.
+  Out-of-root URLs are now reported as a missing node instead of being stat'd.
+  This completes the containment already applied to model paths and file nodes;
+  `unpack` already guarded the same path. Covered by new tests and a `selftest`
+  check.
 
 ## [0.2.0] - 2026-06-21
 

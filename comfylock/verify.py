@@ -58,8 +58,20 @@ def verify(
 
     # --- Git custom nodes ---
     for url, commit in sorted(lock.git_nodes.items()):
-        node_dir = _node_dir_for(root, url) if root else None
-        if node_dir is None or not node_dir.exists():
+        # ``url`` is untrusted; ``_node_dir_for`` turns its last path segment
+        # into a directory name. On Windows that segment can be a UNC/rooted/
+        # drive path (e.g. ``\\attacker\share``) that pathlib treats as absolute,
+        # escaping ``custom_nodes`` -- an unconfined ``.exists()`` would then leak
+        # NTLM credentials / hang on a remote share (existence oracle + DoS), and
+        # ``..`` would probe the root itself. Confine before stat'ing, mirroring
+        # the model-path and file-node guards. (``unpack`` confines the same way.)
+        node_dir = _node_dir_for(root, url) if root is not None else None
+        if (
+            root is None
+            or node_dir is None
+            or not is_within(root, node_dir)
+            or not node_dir.exists()
+        ):
             report.error(f"Node missing: {url} (need {commit[:10]}).")
             continue
         if not is_git_repo(node_dir):
