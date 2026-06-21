@@ -74,13 +74,18 @@ def verify(
 
     # --- File custom nodes ---
     for fn in lock.file_nodes:
-        path = (root / "custom_nodes" / fn.filename) if root else None
-        disabled_path = (
-            (root / "custom_nodes" / (fn.filename + ".disabled")) if root else None
-        )
-        present = bool(path and path.exists()) or bool(
-            disabled_path and disabled_path.exists()
-        )
+        # ``fn.filename`` is untrusted; confine it under the root before stat'ing.
+        # An absolute or ``../`` filename would otherwise turn the present/missing
+        # report into a file-existence oracle, and ``.exists()`` on a device/UNC
+        # path can hang or leak credentials. Mirrors the model-path guard above.
+        # (``unpack`` never writes file nodes, so ``verify`` is the only reader.)
+        present = False
+        if root is not None:
+            cn_dir = root / "custom_nodes"
+            for cand in (cn_dir / fn.filename, cn_dir / (fn.filename + ".disabled")):
+                if is_within(root, cand) and cand.exists():
+                    present = True
+                    break
         if present:
             report.ok(f"File node present: {fn.filename}.")
         else:

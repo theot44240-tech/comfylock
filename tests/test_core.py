@@ -346,6 +346,58 @@ class VerifyPathSafetyTests(unittest.TestCase):
             self.assertTrue(rep.passed, rep.render())
 
 
+class VerifyFileNodeSafetyTests(unittest.TestCase):
+    """A lockfile is untrusted; a file-node ``filename`` must not let ``verify``
+    stat a path outside the root. An absolute or ``../`` filename would turn
+    the present/missing report into a file-existence oracle (does the victim
+    have ``~/.ssh/id_rsa``?) and ``.exists()`` on a device/UNC path can hang or
+    leak credentials. Mirrors the model-path containment guard above."""
+
+    def _lock_with_filenode(self, filename):
+        return serialize.loads(json.dumps({"version": 1, "custom_nodes": {
+            "files": [{"filename": filename}]}}))
+
+    def test_absolute_filename_is_not_statted(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "custom_nodes").mkdir(parents=True)
+            secret = Path(td) / "secret_node.py"
+            secret.write_text("x")  # exists OUTSIDE the root
+            rep = verify(self._lock_with_filenode(str(secret)), root)
+            self.assertFalse(rep.passed)
+            self.assertIn("File node missing", rep.render())
+            self.assertNotIn("File node present", rep.render())
+
+    def test_traversal_filename_is_not_statted(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "custom_nodes").mkdir(parents=True)
+            secret = Path(td) / "secret_node.py"
+            secret.write_text("x")
+            rep = verify(self._lock_with_filenode("../../secret_node.py"), root)
+            self.assertFalse(rep.passed)
+            self.assertIn("File node missing", rep.render())
+            self.assertNotIn("File node present", rep.render())
+
+    def test_legit_filename_is_found(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            cn = root / "custom_nodes"
+            cn.mkdir(parents=True)
+            (cn / "my_node.py").write_text("x")
+            rep = verify(self._lock_with_filenode("my_node.py"), root)
+            self.assertIn("File node present: my_node.py", rep.render())
+
+    def test_legit_disabled_filename_is_found(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            cn = root / "custom_nodes"
+            cn.mkdir(parents=True)
+            (cn / "my_node.py.disabled").write_text("x")
+            rep = verify(self._lock_with_filenode("my_node.py"), root)
+            self.assertIn("File node present: my_node.py", rep.render())
+
+
 class UnpackGitSafetyTests(unittest.TestCase):
     """A lockfile is untrusted; node URLs/commits must not let it run commands.
 
