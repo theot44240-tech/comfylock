@@ -26,7 +26,15 @@ class Hash:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Hash:
-        return Hash(type=str(d.get("type", "")), hash=str(d.get("hash", "")))
+        # Every supported hash type is hex and ``compute()`` emits lowercase, so
+        # canonicalize the stored digest to lowercase on ingest. A lock authored
+        # elsewhere (Civitai AutoV2 / A1111 AutoV1 digests are commonly UPPERCASE)
+        # then compares equal to a freshly computed hash instead of spuriously
+        # failing verify/unpack or showing a phantom change in diff.
+        return Hash(
+            type=str(d.get("type", "")),
+            hash=str(d.get("hash", "")).lower(),
+        )
 
 
 @dataclass

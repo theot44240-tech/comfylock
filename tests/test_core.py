@@ -322,6 +322,42 @@ class AmbiguousModelTests(unittest.TestCase):
             self.assertIn("several files", rep.render())
 
 
+class HashCaseInsensitivityTests(unittest.TestCase):
+    """Interop locks (Civitai/A1111) store hex digests UPPERCASE; ``compute``
+    emits lowercase. Loading must canonicalize so comparison is case-insensitive.
+    """
+
+    def test_loads_lowercases_hash(self):
+        text = json.dumps({"version": 1, "models": [
+            {"name": "m", "hashes": [{"type": "SHA256", "hash": "ABCDEF" + "0" * 58}]}]})
+        lock = serialize.loads(text)
+        self.assertEqual(lock.models[0].hashes[0].hash, "abcdef" + "0" * 58)
+
+    def test_verify_passes_with_uppercase_locked_hash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            mdir = root / "models" / "checkpoints"
+            mdir.mkdir(parents=True)
+            f = mdir / "m.safetensors"
+            f.write_bytes(b"weights" * 500)
+            sha_upper = compute(f, "SHA256").upper()
+            text = json.dumps({"version": 1, "models": [{
+                "name": "m.safetensors",
+                "paths": [{"path": "models/checkpoints/m.safetensors"}],
+                "size": f.stat().st_size,
+                "hashes": [{"type": "SHA256", "hash": sha_upper}]}]})
+            lock = serialize.loads(text)
+            rep = verify(lock, root)
+            self.assertTrue(rep.passed, rep.render())
+
+    def test_diff_ignores_hash_case(self):
+        upper = json.dumps({"version": 1, "models": [
+            {"name": "m", "hashes": [{"type": "SHA256", "hash": "A" * 64}]}]})
+        lower = json.dumps({"version": 1, "models": [
+            {"name": "m", "hashes": [{"type": "SHA256", "hash": "a" * 64}]}]})
+        self.assertTrue(diff(serialize.loads(upper), serialize.loads(lower)).empty)
+
+
 class SchemaCompatTests(unittest.TestCase):
     def test_verify_warns_on_newer_schema(self):
         lock = Lockfile(version=999)
