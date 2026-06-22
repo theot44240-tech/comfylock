@@ -105,6 +105,47 @@ class SerializeTests(unittest.TestCase):
         self.assertEqual(lock.models[0].name, "x")
 
 
+class MalformedLockRobustnessTests(unittest.TestCase):
+    """A hand-authored lock with valid JSON but garbage field *types* must not
+    crash with an uncaught ValueError/TypeError. `serialize.loads` only wraps
+    JSON/YAML decode errors as RuntimeError; `Lockfile.from_dict` runs after
+    that, and the CLI handler catches only FileNotFoundError/RuntimeError/OSError
+    -- so a bare int()/dict() on untrusted input escapes as a traceback."""
+
+    def test_non_numeric_version_falls_back(self):
+        lock = serialize.loads(json.dumps({"version": "abc"}))
+        self.assertEqual(lock.version, 1)
+
+    def test_garbage_size_falls_back_to_none(self):
+        lock = serialize.loads(json.dumps({"models": [{"name": "m", "size": "big"}]}))
+        self.assertIsNone(lock.models[0].size)
+
+    def test_non_dict_parameters_ignored(self):
+        lock = serialize.loads(json.dumps({"parameters": [1, 2, 3]}))
+        self.assertEqual(lock.parameters, {})
+
+    def test_non_list_models_ignored(self):
+        lock = serialize.loads(json.dumps({"models": "oops"}))
+        self.assertEqual(lock.models, [])
+
+    def test_non_dict_custom_nodes_ignored(self):
+        lock = serialize.loads(json.dumps({"custom_nodes": "oops"}))
+        self.assertEqual(lock.git_nodes, {})
+        self.assertEqual(lock.file_nodes, [])
+
+    def test_non_dict_git_and_non_list_files_ignored(self):
+        lock = serialize.loads(json.dumps(
+            {"custom_nodes": {"git": ["a", "b"], "files": {"k": "v"}}}))
+        self.assertEqual(lock.git_nodes, {})
+        self.assertEqual(lock.file_nodes, [])
+
+    def test_non_dict_hash_entries_skipped(self):
+        lock = serialize.loads(json.dumps(
+            {"models": [{"name": "m", "hashes": ["junk", {"type": "SHA256", "hash": "a" * 64}]}]}))
+        self.assertEqual(len(lock.models[0].hashes), 1)
+        self.assertEqual(lock.models[0].hashes[0].type, "SHA256")
+
+
 class PackVerifyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

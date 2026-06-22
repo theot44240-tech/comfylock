@@ -12,6 +12,22 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 
+
+def _as_int(value: Any, default: int | None) -> int | None:
+    """Coerce an untrusted lockfile field to int, falling back on garbage.
+
+    Hand-authored locks may carry non-numeric ``version``/``size`` values
+    (e.g. ``"abc"`` or a list). A bare ``int()`` would raise ValueError/TypeError
+    that escapes the CLI error handler as a traceback, so degrade gracefully.
+    """
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # Hash type identifiers, compatible with comfy-cli's comfy-lock.yaml.
 HASH_TYPES = ("SHA256", "BLAKE3", "BLAKE2B", "CRC32", "AutoV1", "AutoV2")
 
@@ -72,13 +88,20 @@ class Model:
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Model:
         raw_paths = d.get("paths", []) or []
+        if not isinstance(raw_paths, list):
+            raw_paths = []
         paths: list[str] = []
         for p in raw_paths:
             if isinstance(p, dict):
                 paths.append(str(p.get("path", "")))
             else:
                 paths.append(str(p))
-        hashes = [Hash.from_dict(h) for h in (d.get("hashes", []) or [])]
+        raw_hashes = d.get("hashes", []) or []
+        hashes = [
+            Hash.from_dict(h)
+            for h in (raw_hashes if isinstance(raw_hashes, list) else [])
+            if isinstance(h, dict)
+        ]
         size = d.get("size")
         return Model(
             name=str(d.get("name", "")),
@@ -86,7 +109,7 @@ class Model:
             paths=[p for p in paths if p],
             hashes=hashes,
             type=d.get("type"),
-            size=int(size) if size is not None else None,
+            size=_as_int(size, None),
             present=bool(d.get("present", True)),
         )
 
@@ -147,16 +170,36 @@ class Lockfile:
     @staticmethod
     def from_dict(d: dict[str, Any]) -> Lockfile:
         custom = d.get("custom_nodes", {}) or {}
-        git_nodes = {str(k): str(v) for k, v in (custom.get("git", {}) or {}).items()}
-        file_nodes = [FileNode.from_dict(f) for f in (custom.get("files", []) or [])]
-        models = [Model.from_dict(m) for m in (d.get("models", []) or [])]
+        if not isinstance(custom, dict):
+            custom = {}
+        raw_git = custom.get("git", {}) or {}
+        git_nodes = (
+            {str(k): str(v) for k, v in raw_git.items()}
+            if isinstance(raw_git, dict)
+            else {}
+        )
+        raw_files = custom.get("files", []) or []
+        file_nodes = [
+            FileNode.from_dict(f)
+            for f in (raw_files if isinstance(raw_files, list) else [])
+            if isinstance(f, dict)
+        ]
+        raw_models = d.get("models", []) or []
+        models = [
+            Model.from_dict(m)
+            for m in (raw_models if isinstance(raw_models, list) else [])
+            if isinstance(m, dict)
+        ]
+        raw_params = d.get("parameters", {}) or {}
+        parameters = dict(raw_params) if isinstance(raw_params, dict) else {}
+        version = _as_int(d.get("version", SCHEMA_VERSION), SCHEMA_VERSION)
         return Lockfile(
-            version=int(d.get("version", SCHEMA_VERSION)),
+            version=version if version is not None else SCHEMA_VERSION,
             workflow=d.get("workflow"),
             comfyui=d.get("comfyui"),
             generated=d.get("generated"),
             git_nodes=git_nodes,
             file_nodes=file_nodes,
             models=models,
-            parameters=dict(d.get("parameters", {}) or {}),
+            parameters=parameters,
         )
