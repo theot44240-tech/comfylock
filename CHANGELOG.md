@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `diff` now compares model hashes by their full digest, matched by hash type.
+  Previously it compared only the first-listed hash's 10-character prefix, which
+  had two consequences for `diff --exit-code` (a CI gate): a real content change
+  whose new digest shared the old one's first 10 hex chars was reported as *no
+  change* (a 40-bit prefix is brute-forceable, so a swapped model could slip past
+  the gate), and the *same* model recorded with a different hash-type order
+  (e.g. `AutoV2`-first vs `SHA256`-first, where `AutoV2` is literally the first
+  10 hex of `SHA256`) was reported as a *phantom* change. Hashes are now matched
+  by type and compared in full; when the prefixes of the displayed line collide
+  it widens to the full digest. Covered by new tests and a `selftest` check.
+
 ### Security
 
 - `unpack` now confines all writes to the target ComfyUI root. A lockfile is

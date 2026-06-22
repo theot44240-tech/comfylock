@@ -161,6 +161,26 @@ def run_selftest() -> int:
         # --- diff of identical locks is empty ---
         c.check(diff_locks(lock, serialize.read(lock_path)).empty, "diff identical empty")
 
+        # --- diff compares the FULL digest, matched by type ---
+        # A real change whose new SHA256 shares the old digest's first 10 hex
+        # chars must still be detected (the gate compares full digests, not a
+        # brute-forceable 40-bit prefix).
+        coll_old = Lockfile(models=[Model("m", hashes=[Hash("SHA256", "abcdef0123" + "0" * 54)])])
+        coll_new = Lockfile(models=[Model("m", hashes=[Hash("SHA256", "abcdef0123" + "f" * 54)])])
+        c.check(
+            not diff_locks(coll_old, coll_new).empty,
+            "diff detects a change behind a shared 10-hex prefix",
+        )
+        # The same model recorded AutoV2-first vs SHA256-first (AutoV2 == first
+        # 10 hex of SHA256) must NOT show a phantom change.
+        _sha = "a" * 64
+        order_a = Lockfile(models=[Model("m", hashes=[Hash("AutoV2", _sha[:10]), Hash("SHA256", _sha)])])
+        order_b = Lockfile(models=[Model("m", hashes=[Hash("SHA256", _sha), Hash("AutoV2", _sha[:10])])])
+        c.check(
+            diff_locks(order_a, order_b).empty,
+            "diff ignores hash-type ordering for identical content",
+        )
+
         # --- reproducible pack via SOURCE_DATE_EPOCH ---
         import os as _os
 

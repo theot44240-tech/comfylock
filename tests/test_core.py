@@ -164,6 +164,48 @@ class DiffTests(unittest.TestCase):
         self.assertTrue(diff(self._lock(), self._lock()).empty)
 
 
+class DiffHashRobustnessTests(unittest.TestCase):
+    """`diff` must compare the FULL digest, matched by hash *type* -- not a
+    truncated prefix of whichever hash happens to be recorded first. `diff
+    --exit-code` is a CI gate, so a missed change weakens it and a phantom
+    change breaks it."""
+
+    def _lock(self, model):
+        return Lockfile(models=[model])
+
+    def test_short_prefix_collision_is_still_a_change(self):
+        # Two different SHA256 digests sharing their first 10 hex chars: the old
+        # code compared only hash[:10] and reported "No differences".
+        shared = "abcdef0123"
+        old = self._lock(Model("m", hashes=[Hash("SHA256", shared + "0" * 54)]))
+        new = self._lock(Model("m", hashes=[Hash("SHA256", shared + "f" * 54)]))
+        self.assertIn("hash", diff(old, new).render().lower())
+
+    def test_different_type_order_same_content_is_no_change(self):
+        # Same model recorded AutoV2-first vs SHA256-first. AutoV2 is the first
+        # 10 hex of SHA256, so comparing hashes[0] across types is a phantom
+        # change; matching by type must report no difference.
+        sha = "a" * 64
+        av2 = sha[:10]
+        old = self._lock(Model("m", hashes=[Hash("AutoV2", av2), Hash("SHA256", sha)]))
+        new = self._lock(Model("m", hashes=[Hash("SHA256", sha), Hash("AutoV2", av2)]))
+        self.assertTrue(diff(old, new).empty, diff(old, new).render())
+
+    def test_real_change_with_shared_types_detected(self):
+        # A genuine content change still trips when both locks carry several
+        # types and only the strong one differs.
+        old = self._lock(Model("m", hashes=[Hash("CRC32", "1234abcd"), Hash("SHA256", "a" * 64)]))
+        new = self._lock(Model("m", hashes=[Hash("CRC32", "1234abcd"), Hash("SHA256", "b" * 64)]))
+        self.assertIn("hash", diff(old, new).render().lower())
+
+    def test_no_shared_type_surfaces_change(self):
+        # Disjoint hash types: we cannot prove sameness, so a change is surfaced
+        # rather than silently dropped.
+        old = self._lock(Model("m", hashes=[Hash("SHA256", "a" * 64)]))
+        new = self._lock(Model("m", hashes=[Hash("CRC32", "1234abcd")]))
+        self.assertIn("hash", diff(old, new).render().lower())
+
+
 class UnpackTests(unittest.TestCase):
     def test_dry_run_lists_download(self):
         lock = Lockfile(models=[Model(
