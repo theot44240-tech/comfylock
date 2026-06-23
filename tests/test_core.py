@@ -322,6 +322,34 @@ class UnpackTests(unittest.TestCase):
             res = unpack(lock, root, dry_run=False)
             self.assertEqual(res.errors, 1)
 
+    def test_glob_chars_in_name_do_not_falsely_match(self):
+        # A model basename is matched *literally*, not as a glob. A name with a
+        # ``*`` must not be reported "present" just because an unrelated file
+        # matches the pattern -- that would silently skip a required download.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "models" / "checkpoints").mkdir(parents=True)
+            (root / "models" / "checkpoints" / "unrelated.safetensors").write_bytes(b"x")
+            lock = Lockfile(models=[Model(
+                "*.safetensors", url="https://h/x.safetensors",
+                hashes=[Hash("SHA256", "0" * 64)])])
+            res = unpack(lock, root, dry_run=True)
+            self.assertEqual(len(res.actions), 1, res.render())
+            self.assertEqual(res.actions[0].kind, "download")
+
+    def test_bracketed_name_is_detected_present(self):
+        # A real file whose name contains ``[...]`` must be found by the literal
+        # basename match, not missed because rglob read it as a character class.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "models" / "loras").mkdir(parents=True)
+            (root / "models" / "loras" / "model[fp16].safetensors").write_bytes(b"y")
+            lock = Lockfile(models=[Model(
+                "model[fp16].safetensors", url="https://h/x",
+                hashes=[Hash("SHA256", "0" * 64)])])
+            res = unpack(lock, root, dry_run=True)
+            self.assertEqual(len(res.actions), 0, res.render())
+
 
 class UnpackPathSafetyTests(unittest.TestCase):
     """A lockfile is untrusted; ``unpack`` must never write outside the root."""

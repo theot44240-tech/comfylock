@@ -175,12 +175,20 @@ def _model_present(root: Path, m: Model) -> bool:
         dest = root / p
         if _within(root, dest) and dest.exists():
             return True
-    # fall back to basename search under models/
+    # Fall back to an exact-basename search under models/. Match the name
+    # *literally*: ``Path.rglob`` treats its argument as a glob pattern, so a
+    # name carrying ``*``/``?``/``[...]`` would otherwise either match an
+    # unrelated file -- making unpack think the model is present and silently
+    # skip a required download -- or fail to match a real file whose name
+    # contains brackets (re-downloading it needlessly). ``scan.locate_models``
+    # already keys models by exact basename; mirror that here.
     base = Path(m.name).name
+    if not base:
+        return False
     models_dir = root / "models"
     if models_dir.is_dir():
-        for f in models_dir.rglob(base):
-            if f.is_file():
+        for f in models_dir.rglob("*"):
+            if f.is_file() and f.name == base:
                 return True
     return False
 
