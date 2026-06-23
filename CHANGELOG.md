@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verify` now checks a model at the path the lock recorded before falling back
+  to a basename search. Previously it resolved every model by basename first
+  (the lexicographically-smallest match under `models/`) and only consulted the
+  lock's recorded `paths` when that search found nothing. When two files share a
+  basename across `models/` subdirectories — common, e.g. the same LoRA copied
+  into two folders — `verify` hashed the wrong file: a false hash/size-mismatch
+  error on an otherwise-clean environment, and a way for a same-named decoy in an
+  earlier-sorting subdir to mask the genuinely pinned artifact. The recorded path
+  (confined to the root, as before) now wins when it still exists; the basename
+  search remains the fallback so a model that legitimately moved subfolders still
+  resolves. This matches how `unpack._model_present` already resolved presence.
+  Covered by new tests and a `selftest` check.
 - `diff` now compares model hashes by their full digest, matched by hash type.
   Previously it compared only the first-listed hash's 10-character prefix, which
   had two consequences for `diff --exit-code` (a CI gate): a real content change

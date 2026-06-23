@@ -710,6 +710,46 @@ class AmbiguousModelTests(unittest.TestCase):
             self.assertGreaterEqual(rep.n_warnings, 1)
             self.assertIn("several files", rep.render())
 
+    def test_verify_prefers_recorded_path_over_basename(self):
+        # The lock pins models/loras/x.safetensors. A *different* file with the
+        # same basename later appears in an earlier-sorting subdir (checkpoints).
+        # verify must hash the recorded path (which matches), not the lexically
+        # smallest basename match -- otherwise it falsely fails on a clean env and
+        # an attacker could mask the genuinely pinned artifact behind a same-named
+        # decoy. Mirrors unpack._model_present's recorded-path-first resolution.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            loras = root / "models" / "loras"
+            loras.mkdir(parents=True)
+            (loras / "x.safetensors").write_bytes(b"REAL-LOCKED-WEIGHTS" * 100)
+            wf = {"nodes": [{"widgets_values": ["x.safetensors"]}]}
+            lock = build_lock(wf, "w.json", root, hash_types=["SHA256"])
+            self.assertEqual(lock.models[0].paths, ["models/loras/x.safetensors"])
+            self.assertTrue(verify(lock, root).passed)
+            # An unrelated same-named file lands in checkpoints (sorts before loras).
+            ckpt = root / "models" / "checkpoints"
+            ckpt.mkdir(parents=True)
+            (ckpt / "x.safetensors").write_bytes(b"UNRELATED-DECOY" * 7)
+            rep = verify(lock, root)
+            self.assertTrue(rep.passed, rep.render())
+            self.assertIn("models/loras/x.safetensors", rep.render())
+
+    def test_verify_falls_back_to_basename_when_moved(self):
+        # If the recorded path is gone but the file moved to another subdir, the
+        # basename search must still find and verify it (subfolder-agnostic).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            loras = root / "models" / "loras"
+            loras.mkdir(parents=True)
+            (loras / "x.safetensors").write_bytes(b"WEIGHTS" * 200)
+            wf = {"nodes": [{"widgets_values": ["x.safetensors"]}]}
+            lock = build_lock(wf, "w.json", root, hash_types=["SHA256"])
+            # Move the model to a different subfolder than the one pinned.
+            ckpt = root / "models" / "checkpoints"
+            ckpt.mkdir(parents=True)
+            (loras / "x.safetensors").rename(ckpt / "x.safetensors")
+            self.assertTrue(verify(lock, root).passed)
+
 
 class HashCaseInsensitivityTests(unittest.TestCase):
     """Interop locks (Civitai/A1111) store hex digests UPPERCASE; ``compute``

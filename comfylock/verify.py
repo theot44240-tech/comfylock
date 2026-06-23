@@ -113,14 +113,25 @@ def verify(
         if not m.present:
             report.warn(f"Model '{m.name}': not pinned (was missing at pack time).")
             continue
-        path = located.found.get(m.name)
-        if path is None and m.paths and root:
-            # ``m.paths`` comes from the untrusted lockfile; confine the fallback
-            # to the ComfyUI root so a malicious lock can't make verify stat/hash
-            # an arbitrary absolute or ``../`` path (file-existence / content
-            # oracle, or a hang on a device file). ``unpack`` confines the same way.
+        # Resolve which file to check. Prefer the lock's recorded exact path: it
+        # is the authoritative location pinned at pack time, so when it still
+        # exists it must win over a basename match -- otherwise a same-named file
+        # in an earlier-sorting models/ subdir gets hashed instead, which is both
+        # a false mismatch on an otherwise-clean env (a duplicated LoRA/checkpoint
+        # is common) and a way to mask the genuinely pinned artifact. ``m.paths``
+        # is untrusted, so confine it under the root first (a malicious lock could
+        # otherwise point at an arbitrary absolute / ``../`` path: a file-existence
+        # or content oracle, or a hang on a device file). Fall back to the basename
+        # search only when the recorded path is gone -- so a model that legitimately
+        # moved subfolders still resolves. ``unpack._model_present`` checks presence
+        # in this same order (recorded path, then exact-basename search).
+        path: Path | None = None
+        if root and m.paths:
             cand = root / m.paths[0]
-            path = cand if (is_within(root, cand) and cand.exists()) else None
+            if is_within(root, cand) and cand.exists():
+                path = cand
+        if path is None:
+            path = located.found.get(m.name)
         if path is None or not path.exists():
             report.error(f"Model '{m.name}': file not found.")
             continue

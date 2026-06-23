@@ -221,6 +221,24 @@ def run_selftest() -> int:
             "ambiguous match resolved deterministically",
         )
 
+        # --- verify prefers the lock's recorded path over a basename collision ---
+        # A same-named decoy in an earlier-sorting subdir must not be hashed in
+        # place of the genuinely pinned file (false mismatch / artifact masking).
+        prefroot = Path(td) / "prefer"
+        (prefroot / "models" / "loras").mkdir(parents=True)
+        (prefroot / "models" / "loras" / "x.safetensors").write_bytes(b"PINNED" * 50)
+        pref_lock = build_lock(
+            {"nodes": [{"widgets_values": ["x.safetensors"]}]},
+            "w.json", prefroot, hash_types=["SHA256"],
+        )
+        c.check(verify(pref_lock, prefroot).passed, "verify passes on the pinned file")
+        (prefroot / "models" / "checkpoints").mkdir(parents=True)
+        (prefroot / "models" / "checkpoints" / "x.safetensors").write_bytes(b"DECOY")
+        c.check(
+            verify(pref_lock, prefroot).passed,
+            "verify checks the recorded path, not the earlier-sorting decoy",
+        )
+
         # --- unpack confines writes to the root (untrusted lockfile) ---
         src = Path(td) / "payload.bin"
         src.write_bytes(b"x" * 64)
