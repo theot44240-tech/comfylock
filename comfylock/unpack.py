@@ -11,7 +11,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .hashes import COMPUTABLE, compute
+from .hashes import STRONG, compute
 from .model import Lockfile, Model
 from .scan import git, head_commit, is_git_repo, is_within
 
@@ -78,11 +78,24 @@ def _default_dest(m: Model) -> str:
     return f"models/{sub}/{Path(m.name).name}"
 
 
-def _node_dir_for(root: Path, url: str) -> Path:
-    name = url.rstrip("/").split("/")[-1]
-    if name.endswith(".git"):
-        name = name[:-4]
-    return root / "custom_nodes" / name
+def _node_dir_for(root: Path, url: str) -> Path | None:
+    """Map a repo URL to its ``custom_nodes/<name>`` directory, or None.
+
+    The clone target is the URL's last path segment. A lockfile is untrusted, so
+    that segment is sanitized to a *single* clean directory component: it is split
+    on both ``/`` and ``\\`` (on Windows a backslash is a path separator, so an
+    OS-naive ``/``-only split would let a segment like ``x\\..\\loras`` carry
+    separators and ``..`` into the join and land the clone in another subdir of
+    the root, e.g. ``models/``, instead of under ``custom_nodes/``). A segment
+    that is empty or a bare ``.``/``..`` is rejected (returns None). ``_within``
+    still guards the final path as defense in depth.
+    """
+    seg = url.rstrip("/").replace("\\", "/").rstrip("/").split("/")[-1]
+    if seg.endswith(".git"):
+        seg = seg[:-4]
+    if not seg or seg in (".", ".."):
+        return None
+    return root / "custom_nodes" / seg
 
 
 # A pinned commit is always a git object name: hex, 7-64 chars (sha1=40,
@@ -109,8 +122,14 @@ def _safe_commit(commit: str) -> bool:
 
 
 def _verifiable_ht(m: Model) -> str | None:
-    """First hash type in the lock we can recompute locally, or None."""
-    return next((ht for ht in COMPUTABLE if m.hash_of(ht)), None)
+    """First *strong* hash type in the lock we can recompute locally, or None.
+
+    Only a strong full-file digest (see ``hashes.STRONG``) certifies a download:
+    a weak hash (CRC32/AutoV2/AutoV1) chosen by an untrusted lock is cheaply
+    forgeable and so provides no real protection against a tampered or swapped
+    artifact -- the exact guarantee this gate exists to enforce.
+    """
+    return next((ht for ht in STRONG if m.hash_of(ht)), None)
 
 
 def _within(root: Path, candidate: Path) -> bool:
@@ -140,7 +159,7 @@ def unpack(
             )
             continue
         node_dir = _node_dir_for(root, url)
-        if not _within(root, node_dir):
+        if node_dir is None or not _within(root, node_dir):
             result.actions.append(
                 Action("skip", url, "unsafe node path", error="unsafe path")
             )
@@ -205,9 +224,10 @@ def _plan_model(root: Path, m: Model) -> Action | None:
     # the bytes would land in the models tree, where ComfyUI loads them (and a
     # later run would treat the model as already satisfied). Fail clean instead.
     # (`pack` always records a SHA256 for present models, so locks produced by
-    # this tool are unaffected; this only blocks hand-authored/imported locks.)
+    # this tool are unaffected; this only blocks hand-authored/imported locks
+    # that carry no strong hash -- e.g. only a forgeable AutoV2/CRC32/AutoV1.)
     if _verifiable_ht(m) is None:
-        return Action("skip", m.name, "no verifiable hash in lock", error="no hash")
+        return Action("skip", m.name, "no strong hash to verify download", error="no hash")
     return Action("download", m.name, f"{m.url} -> {dest}")
 
 
@@ -243,8 +263,8 @@ def _do_download(root: Path, m: Model, act: Action) -> None:
         act.error = "unsafe path"
         return
     ht = _verifiable_ht(m)
-    if ht is None:  # defense in depth; _plan_model already refuses no-hash locks
-        act.error = "no verifiable hash in lock"
+    if ht is None:  # defense in depth; _plan_model already refuses weak-only locks
+        act.error = "no strong hash to verify download"
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:

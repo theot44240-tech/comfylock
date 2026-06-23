@@ -286,6 +286,40 @@ def run_selftest() -> int:
             "verify refuses an out-of-root git-node path",
         )
 
+        # --- integrity gate: a weak-only hash cannot certify a download ---
+        # An untrusted lock that pins only a forgeable hash (AutoV2 = 40-bit
+        # prefix of SHA256) must not be fetched; a strong hash still downloads.
+        weakroot = Path(td) / "weak_root"
+        weakroot.mkdir()
+        weak = Lockfile(models=[Model(
+            "weak.bin", url=src_url, paths=["models/loras/weak.bin"],
+            hashes=[Hash("AutoV2", compute(src, "AutoV2"))])])
+        wk_res = unpack(weak, weakroot, dry_run=False)
+        c.check(
+            wk_res.errors >= 1 and not (weakroot / "models/loras/weak.bin").exists(),
+            "unpack refuses a weak-only (forgeable hash) download",
+        )
+
+        # --- AutoV1 no longer collapses small files to one constant ---
+        sa = Path(td) / "av1_a.bin"
+        sb = Path(td) / "av1_b.bin"
+        sa.write_bytes(b"AAAA" * 8)
+        sb.write_bytes(b"BBBB" * 9)
+        c.check(
+            compute(sa, "AutoV1") != compute(sb, "AutoV1"),
+            "AutoV1 distinguishes distinct small files (no empty-window constant)",
+        )
+
+        # --- diff: SHA256 vs its derived AutoV2 is not a phantom change ---
+        _s = "abcd012345" + "0" * 54
+        c.check(
+            diff_locks(
+                Lockfile(models=[Model("m", hashes=[Hash("SHA256", _s)])]),
+                Lockfile(models=[Model("m", hashes=[Hash("AutoV2", _s[:10])])]),
+            ).empty,
+            "diff reconciles SHA256 with its derived AutoV2 (no phantom change)",
+        )
+
         # --- malformed lockfile yields a clean error, not a traceback ---
         bad = Path(td) / "bad.lock"
         bad.write_text("{not valid json", encoding="utf-8")

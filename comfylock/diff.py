@@ -55,6 +55,22 @@ def _hash_display(hm: dict[str, str], full: bool = False) -> str:
     return "?"
 
 
+def _derivably_same(a: dict[str, str], b: dict[str, str]) -> bool:
+    """True when two *disjoint* hash maps still provably describe one file.
+
+    ``AutoV2`` is, by definition, the first 10 hex chars of the file's full
+    ``SHA256`` (see ``hashes.compute``). So a lock carrying only ``SHA256`` and
+    one carrying only ``AutoV2`` describe identical content iff ``SHA256[:10] ==
+    AutoV2``. No other cross-type relation is derivable (AutoV1/CRC32/BLAKE* are
+    independent algorithms), so only this one pairing is reconciled.
+    """
+    for x, y in ((a, b), (b, a)):
+        sha, av2 = x.get("SHA256"), y.get("AUTOV2")
+        if sha and av2 and sha[:10] == av2:
+            return True
+    return False
+
+
 def _model_hash_changed(old: Model, new: Model) -> bool:
     """True when two models' recorded hashes indicate different content.
 
@@ -69,15 +85,19 @@ def _model_hash_changed(old: Model, new: Model) -> bool:
       ``AutoV2``-first vs ``SHA256``-first, and ``AutoV2`` is literally the first
       10 hex of ``SHA256`` -- was reported as a *phantom* change.
 
-    When the two locks share no comparable hash type, the displayed (strongest)
-    hash is compared so a wholesale algorithm swap is still surfaced rather than
-    silently dropped.
+    When the two locks share no comparable hash type, one last reconciliation is
+    tried (``SHA256`` vs its derived ``AutoV2`` prefix) before falling back to
+    comparing the displayed (strongest) hash, so a re-pack with ``--hash AutoV2``
+    of an unchanged model is not a phantom change while a wholesale algorithm swap
+    is still surfaced rather than silently dropped.
     """
     a, b = _hash_map(old), _hash_map(new)
     common = a.keys() & b.keys()
     if common:
         return any(a[t] != b[t] for t in common)
     if not a and not b:
+        return False
+    if _derivably_same(a, b):
         return False
     return _hash_display(a) != _hash_display(b)
 

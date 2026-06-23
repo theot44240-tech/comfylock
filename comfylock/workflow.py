@@ -96,7 +96,12 @@ def extract_params(workflow: Any) -> dict[str, Any]:
         for node in nodes:
             if not isinstance(node, dict):
                 continue
-            for inp in node.get("inputs", []) or []:
+            # ``inputs`` is untrusted workflow data: a truthy non-iterable scalar
+            # (e.g. ``"inputs": 5``) would make ``... or []`` keep the scalar and
+            # ``for inp in 5`` raise an uncaught TypeError -> CLI traceback on
+            # ``pack``. Only iterate when it is really a list/tuple.
+            node_inputs = node.get("inputs")
+            for inp in node_inputs if isinstance(node_inputs, (list, tuple)) else []:
                 if isinstance(inp, dict) and "name" in inp:
                     consider(str(inp["name"]), inp.get("widget", {}).get("value")
                              if isinstance(inp.get("widget"), dict) else inp.get("value"))

@@ -27,14 +27,17 @@ def _now_iso() -> str:
     """
     sde = os.environ.get("SOURCE_DATE_EPOCH")
     if sde:
+        # A non-numeric or out-of-range value must not crash pack: int() rejects
+        # garbage, and fromtimestamp() raises OverflowError/OSError/ValueError for
+        # an epoch outside the platform's representable range (e.g. a huge or very
+        # negative number). Fall through to "now" in every such case.
         try:
             ts = int(sde)
-        except ValueError:
-            pass
-        else:
             return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
             )
+        except (TypeError, ValueError, OverflowError, OSError):
+            pass
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 

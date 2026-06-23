@@ -26,10 +26,23 @@ except Exception:  # pragma: no cover - depends on environment
 
 _CHUNK = 1024 * 1024  # 1 MiB
 
-# Hash types we can compute locally (used to pick a verifiable hash from a lock).
+# Hash types we can compute locally (used when packing/diffing a lock).
 COMPUTABLE = ["SHA256", "AutoV2", "CRC32", "BLAKE2B", "AutoV1"]
 if _HAS_BLAKE3:
     COMPUTABLE.insert(1, "BLAKE3")
+
+# Cryptographically strong, full-file digests. Only these are accepted as
+# integrity evidence when admitting a download (``unpack``) or asserting a model
+# is untampered (``verify``). A weak/truncated hash chosen by an *untrusted* lock
+# provides no real protection against an adversary who controls the bytes (a MITM
+# on the download, or a swapped artifact): CRC32 is a 32-bit non-cryptographic
+# checksum, AutoV2 is only a 40-bit prefix of SHA256, and AutoV1 hashes at most a
+# 64 KiB window -- all cheaply forgeable. They remain in COMPUTABLE so they can
+# still be recorded by ``pack`` and compared by ``diff``; they just cannot, on
+# their own, certify integrity. Order = preferred-first.
+STRONG = ["SHA256", "BLAKE2B"]
+if _HAS_BLAKE3:
+    STRONG.insert(1, "BLAKE3")
 
 
 def has_blake3() -> bool:
@@ -56,6 +69,15 @@ def compute(path: str | Path, hash_type: str) -> str:
         with open(p, "rb") as f:
             f.seek(0x100000)
             region = f.read(0x10000)
+        if not region:
+            # The file is smaller than the 1 MiB offset, so the legacy A1111
+            # window is empty -- hashing it would make *every* small file (e.g. a
+            # few-KB embedding) collapse to the same constant sha256(b"")[:8],
+            # which both defeats tamper detection and makes any small download
+            # "verify". Fall back to a full-file digest so the value depends on
+            # the content. (A1111 only ever applied the window to large
+            # checkpoints; small files were always best-effort, see module doc.)
+            return _sha256_full(p)[:8]
         return hashlib.sha256(region).hexdigest()[:8]
     if t == "CRC32":
         crc = 0
@@ -92,9 +114,16 @@ class HashCache:
         self._data: dict[str, str] = {}
         if self.path and self.path.exists():
             try:
-                self._data = json.loads(self.path.read_text(encoding="utf-8"))
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
             except Exception:
-                self._data = {}
+                loaded = {}
+            # The cache file lives in the (shared/copied/corruptible) ComfyUI root
+            # and is "safe to delete". A truncated or hand-edited file can be valid
+            # JSON yet not an object (e.g. ``[1,2,3]``, ``42``, ``"x"``); json.loads
+            # would then succeed and ``_data`` would be a non-dict, so the first
+            # ``key in self._data`` / ``self._data[key] = ...`` raises an uncaught
+            # TypeError. Fall back to an empty cache unless it is really a dict.
+            self._data = loaded if isinstance(loaded, dict) else {}
 
     @staticmethod
     def _key(p: Path, hash_type: str) -> str:

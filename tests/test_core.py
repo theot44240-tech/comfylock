@@ -59,6 +59,31 @@ class HashTests(unittest.TestCase):
         self.path.write_bytes(b"changed")
         self.assertNotEqual(cache2.get(self.path, "SHA256"), v1)
 
+    def test_cache_file_that_is_valid_json_but_not_a_dict(self):
+        # The cache lives in the shared/corruptible ComfyUI root. A truncated or
+        # hand-edited file can be valid JSON yet not an object (``[1,2,3]``, a
+        # bare number, a string). json.loads then succeeds, so the old code stored
+        # a non-dict and crashed with an uncaught TypeError on first use. It must
+        # fall back to an empty cache and still compute correctly.
+        for junk in ("[1, 2, 3]", "42", '"hello"', "true", "null"):
+            cache_path = Path(self.tmp.name) / "bad.json"
+            cache_path.write_text(junk, encoding="utf-8")
+            cache = HashCache(cache_path)
+            self.assertEqual(cache.get(self.path, "SHA256"), compute(self.path, "SHA256"))
+
+    def test_autov1_small_files_are_not_a_constant(self):
+        # AutoV1 reads a 64 KiB window at offset 1 MiB; for files below 1 MiB the
+        # window is empty, which used to collapse *every* small file to the same
+        # constant sha256(b"")[:8]='e3b0c442' -- defeating tamper detection. Two
+        # distinct small files must now hash differently.
+        a = Path(self.tmp.name) / "a.bin"
+        b = Path(self.tmp.name) / "b.bin"
+        a.write_bytes(b"AAAA" * 10)
+        b.write_bytes(b"BBBB" * 999)
+        self.assertNotEqual(compute(a, "AutoV1"), compute(b, "AutoV1"))
+        self.assertNotEqual(compute(a, "AutoV1"), "e3b0c442")
+        self.assertEqual(len(compute(a, "AutoV1")), 8)
+
 
 class WorkflowTests(unittest.TestCase):
     def test_extract_models_ui_format(self):
@@ -79,6 +104,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(p["seed"], 7)
         self.assertEqual(p["steps"], 30)
         self.assertEqual(p["sampler_name"], "dpmpp")
+
+    def test_extract_params_scalar_inputs_does_not_crash(self):
+        # A UI-graph node whose ``inputs`` is a truthy non-iterable scalar is
+        # malformed/untrusted workflow data. The old ``... or []`` kept the scalar
+        # and ``for inp in 5`` raised an uncaught TypeError -> CLI traceback on
+        # ``pack``. It must be skipped, returning the params from the valid nodes.
+        for bad in (5, 3.14, True):
+            wf = {"nodes": [{"inputs": bad},
+                            {"inputs": [{"name": "seed", "widget": {"value": 9}}]}]}
+            self.assertEqual(extract_params(wf), {"seed": 9})
 
 
 class SerializeTests(unittest.TestCase):
@@ -244,6 +279,24 @@ class DiffHashRobustnessTests(unittest.TestCase):
         # rather than silently dropped.
         old = self._lock(Model("m", hashes=[Hash("SHA256", "a" * 64)]))
         new = self._lock(Model("m", hashes=[Hash("CRC32", "1234abcd")]))
+        self.assertIn("hash", diff(old, new).render().lower())
+
+    def test_sha256_vs_derived_autov2_is_no_phantom_change(self):
+        # AutoV2 is the first 10 hex of the file's SHA256. A lock carrying only
+        # SHA256 vs one carrying only the derived AutoV2 (e.g. a re-pack with
+        # ``--hash AutoV2``, or a Civitai import) describes the SAME file -- the
+        # type-matching fix only covered overlapping types, so this disjoint case
+        # was a phantom change that broke ``diff --exit-code``.
+        sha = "abcd012345" + "0" * 54
+        old = self._lock(Model("m", hashes=[Hash("SHA256", sha)]))
+        new = self._lock(Model("m", hashes=[Hash("AutoV2", sha[:10])]))
+        self.assertTrue(diff(old, new).empty, diff(old, new).render())
+
+    def test_sha256_vs_unrelated_autov2_is_a_change(self):
+        # The reconciliation must not hide a real difference: an AutoV2 that is
+        # NOT the prefix of the other lock's SHA256 is still a change.
+        old = self._lock(Model("m", hashes=[Hash("SHA256", "abcd012345" + "0" * 54)]))
+        new = self._lock(Model("m", hashes=[Hash("AutoV2", "ffffffffff")]))
         self.assertIn("hash", diff(old, new).render().lower())
 
 
@@ -637,6 +690,25 @@ class UnpackGitSafetyTests(unittest.TestCase):
             self.assertEqual(len(res.actions), 1)
             self.assertEqual(res.actions[0].kind, "clone")
 
+    def test_node_dir_is_confined_to_custom_nodes(self):
+        # The clone dir is the URL's last segment. On Windows '\' is a path
+        # separator, so a segment like ``x\..\loras`` (OS-naively split only on
+        # '/') escaped custom_nodes/ into another root subdir. The name must
+        # reduce to a single clean component under custom_nodes/, and a bare
+        # ``..``/``.`` segment must be rejected entirely.
+        from comfylock.unpack import _node_dir_for
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            nd = _node_dir_for(root, "https://h/x\\..\\loras")
+            self.assertIsNotNone(nd)
+            self.assertEqual(nd.parent, root / "custom_nodes")
+            self.assertIsNone(_node_dir_for(root, "https://h/.."))
+            # A pure-traversal last segment is refused at unpack time.
+            lock = Lockfile(git_nodes={"https://h/..": "d" * 40})
+            res = unpack(lock, root, dry_run=True)
+            self.assertGreaterEqual(res.errors, 1, res.render())
+            self.assertIn("unsafe path", res.render())
+
 
 class HashTypeValidationTests(unittest.TestCase):
     def setUp(self):
@@ -681,6 +753,25 @@ class DeterminismTests(unittest.TestCase):
                 os.environ.pop("SOURCE_DATE_EPOCH", None)
             self.assertEqual(serialize.dumps_json(a), serialize.dumps_json(b))
             self.assertEqual(a.generated, "2023-11-14T22:13:20Z")
+
+    def test_out_of_range_source_date_epoch_does_not_crash(self):
+        # A syntactically-valid but out-of-range SOURCE_DATE_EPOCH made
+        # datetime.fromtimestamp raise OverflowError/OSError -> uncaught traceback
+        # on ``pack``. pack must fall back to "now" and still produce a lock.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            mdir = root / "models" / "checkpoints"
+            mdir.mkdir(parents=True)
+            (mdir / "m.safetensors").write_bytes(b"w" * 256)
+            wf = {"nodes": [{"widgets_values": ["m.safetensors"]}]}
+            for bad in ("99999999999999999999", "-99999999999999999999", "abc"):
+                os.environ["SOURCE_DATE_EPOCH"] = bad
+                try:
+                    lock = build_lock(wf, "w.json", root)  # must not raise
+                finally:
+                    os.environ.pop("SOURCE_DATE_EPOCH", None)
+                self.assertTrue(lock.generated)
+                self.assertTrue(lock.generated.endswith("Z"))
 
 
 class AmbiguousModelTests(unittest.TestCase):
@@ -866,6 +957,83 @@ class GitNodeTests(unittest.TestCase):
             from comfylock.scan import scan_custom_nodes
             git_nodes, _ = scan_custom_nodes(root)
             self.assertIn("https://github.com/example/SomeNode.git", git_nodes)
+
+
+class IntegrityHashGateTests(unittest.TestCase):
+    """A lockfile is untrusted and supplies both the download URL and the hash to
+    check it against. Only a strong full-file digest (SHA256/BLAKE3/BLAKE2B) is
+    sufficient integrity evidence: a weak hash (CRC32 32-bit, AutoV2 40-bit prefix
+    of SHA256, AutoV1 partial-window) is cheaply forgeable, so ``unpack`` must not
+    fetch and ``verify`` must not certify on one alone. ``unpack`` and ``verify``
+    agree on what counts as verifiable."""
+
+    def test_unpack_refuses_weak_only_download(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.safetensors"
+            src.write_bytes(b"abc" * 100)
+            av2 = compute(src, "AutoV2")  # 40-bit prefix of SHA256, forgeable
+            dest_rel = "models/checkpoints/src.safetensors"
+            lock = Lockfile(models=[Model(
+                "src.safetensors", url=src.resolve().as_uri(), paths=[dest_rel],
+                hashes=[Hash("AutoV2", av2)])])
+            root = Path(td) / "ComfyUI"
+            root.mkdir()
+            res = unpack(lock, root, dry_run=False)
+            self.assertEqual(res.errors, 1, res.render())
+            self.assertIn("strong hash", res.render())
+            self.assertFalse((root / dest_rel).exists())
+
+    def test_unpack_still_downloads_with_a_strong_hash(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.safetensors"
+            src.write_bytes(b"abc" * 100)
+            # Strong (SHA256) plus an extra weak hash: still admitted+verified.
+            lock = Lockfile(models=[Model(
+                "src.safetensors", url=src.resolve().as_uri(),
+                paths=["models/checkpoints/src.safetensors"],
+                hashes=[Hash("AutoV2", compute(src, "AutoV2")),
+                        Hash("SHA256", compute(src, "SHA256"))])])
+            root = Path(td) / "ComfyUI"
+            root.mkdir()
+            res = unpack(lock, root, dry_run=False)
+            self.assertEqual(res.errors, 0, res.render())
+            self.assertTrue((root / "models/checkpoints/src.safetensors").exists())
+
+    def test_verify_weak_only_hash_is_not_a_confident_match(self):
+        # An AutoV1-only lock on a present file used to report "AutoV1 matches"
+        # (and for any <1MiB file it matched arbitrary content). verify must now
+        # warn that integrity is not cryptographically verified rather than
+        # asserting a match.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            mdir = root / "models" / "checkpoints"
+            mdir.mkdir(parents=True)
+            f = mdir / "m.safetensors"
+            f.write_bytes(b"weights" * 10)  # < 1 MiB
+            lock = serialize.loads(json.dumps({"version": 1, "models": [{
+                "name": "m.safetensors",
+                "paths": [{"path": "models/checkpoints/m.safetensors"}],
+                "size": f.stat().st_size,
+                "hashes": [{"type": "AutoV1", "hash": compute(f, "AutoV1")}]}]}))
+            rep = verify(lock, root)
+            self.assertIn("weak hash", rep.render().lower())
+            self.assertNotIn("matches", rep.render())
+
+    def test_verify_passes_with_strong_hash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            mdir = root / "models" / "checkpoints"
+            mdir.mkdir(parents=True)
+            f = mdir / "m.safetensors"
+            f.write_bytes(b"weights" * 500)
+            lock = serialize.loads(json.dumps({"version": 1, "models": [{
+                "name": "m.safetensors",
+                "paths": [{"path": "models/checkpoints/m.safetensors"}],
+                "size": f.stat().st_size,
+                "hashes": [{"type": "SHA256", "hash": compute(f, "SHA256")}]}]}))
+            rep = verify(lock, root)
+            self.assertTrue(rep.passed, rep.render())
+            self.assertIn("matches", rep.render())
 
 
 if __name__ == "__main__":

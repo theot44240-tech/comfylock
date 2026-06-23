@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .hashes import COMPUTABLE, HashCache
+from .hashes import STRONG, HashCache
 from .model import SCHEMA_VERSION, Lockfile, Model
 from .report import Report
 from .scan import (
@@ -19,8 +19,16 @@ from .scan import (
 
 
 def _verifiable_hash(model: Model) -> tuple[str, str] | None:
-    """Pick a (type, value) from the model's hashes that we can recompute."""
-    for ht in COMPUTABLE:
+    """Pick a (type, value) from the model's *strong* hashes, or None.
+
+    Only a strong full-file digest (see ``hashes.STRONG``) is treated as
+    sufficient to certify a model is untampered. A weak hash (CRC32/AutoV2/AutoV1)
+    is cheaply forgeable by a party that controls the bytes, so under the
+    untrusted-lock threat model it must not be reported as a confident match --
+    mirrors ``unpack._verifiable_ht`` so the two commands agree on what counts as
+    verifiable.
+    """
+    for ht in STRONG:
         v = model.hash_of(ht)
         if v:
             return ht, v
@@ -153,7 +161,13 @@ def verify(
             continue
         hv = _verifiable_hash(m)
         if hv is None:
-            report.warn(f"Model '{m.name}': no recomputable hash in lock.")
+            if m.hashes:
+                report.warn(
+                    f"Model '{m.name}': only a weak hash recorded "
+                    "(AutoV2/CRC32/AutoV1); integrity not cryptographically verified."
+                )
+            else:
+                report.warn(f"Model '{m.name}': no recomputable hash in lock.")
             continue
         ht, expected = hv
         actual = cache.get(path, ht)
@@ -169,8 +183,18 @@ def verify(
 
 
 def _node_dir_for(root: Path, url: str):
-    """Best-effort: map a repo URL to its custom_nodes/<name> directory."""
-    name = url.rstrip("/").split("/")[-1]
-    if name.endswith(".git"):
-        name = name[:-4]
-    return root / "custom_nodes" / name
+    """Map a repo URL to its custom_nodes/<name> directory, or None.
+
+    The directory name is the URL's last path segment, sanitized to a single
+    clean component: split on both ``/`` and ``\\`` (a backslash is a path
+    separator on Windows, so an OS-naive split would let a segment carry
+    separators/``..`` and escape ``custom_nodes/``), and reject an empty or bare
+    ``.``/``..`` segment. The caller treats None as a missing node. Mirrors
+    ``unpack._node_dir_for``.
+    """
+    seg = url.rstrip("/").replace("\\", "/").rstrip("/").split("/")[-1]
+    if seg.endswith(".git"):
+        seg = seg[:-4]
+    if not seg or seg in (".", ".."):
+        return None
+    return root / "custom_nodes" / seg

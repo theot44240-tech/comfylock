@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `pack` no longer crashes on a malformed UI-graph workflow whose node `inputs`
+  is a non-list scalar (e.g. `"inputs": 5`). The previous `... or []` kept the
+  scalar and `for inp in 5` raised an uncaught `TypeError`, surfacing as a Python
+  traceback instead of the CLI's clean error; such a node is now skipped.
+- `pack` no longer crashes when `SOURCE_DATE_EPOCH` is a valid integer but out of
+  the platform's representable range (e.g. a huge or very negative value). The
+  `datetime.fromtimestamp` call raised an uncaught `OverflowError`/`OSError`; pack
+  now falls back to the current time, like it already did for non-numeric values.
+- The hash cache no longer crashes when its on-disk file (`.comfylock-cache.json`,
+  which lives in the shared/copyable ComfyUI root) is valid JSON but not an object
+  — e.g. a truncated write leaving `[1,2,3]`, a bare number, or a string. Parsing
+  succeeded so the old code stored a non-`dict` and raised an uncaught `TypeError`
+  on first lookup; it now falls back to an empty cache.
+- `diff` no longer reports a phantom hash change when one lock records a model's
+  `SHA256` and the other records only the derived `AutoV2` (the first 10 hex of
+  that SHA256) — e.g. a re-pack with `--hash AutoV2`, or a Civitai-imported lock.
+  The earlier "match by type" fix only reconciled overlapping hash types; the
+  disjoint `SHA256`/`AutoV2` case slipped through and broke `diff --exit-code`. A
+  genuinely unrelated `AutoV2` is still surfaced as a change.
 - `verify` now checks a model at the path the lock recorded before falling back
   to a basename search. Previously it resolved every model by basename first
   (the lexicographically-smallest match under `models/`) and only consulted the
@@ -34,6 +53,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Integrity is now certified only by a strong full-file hash (SHA256, BLAKE3, or
+  BLAKE2B). A lockfile is untrusted and supplies both a model's download URL and
+  the hash used to check it, so a weak hash it pins gives no real protection
+  against a tampered or swapped artifact: CRC32 is a 32-bit checksum, AutoV2 is a
+  40-bit prefix of SHA256, and AutoV1 covers at most a 64 KiB window. `unpack` now
+  refuses to fetch a model that pins only such a hash (`no strong hash to verify
+  download`), and `verify` reports `integrity not cryptographically verified`
+  instead of a confident match — the two commands now agree on what is
+  verifiable. These types are still recorded by `pack` and compared by `diff`.
+- `AutoV1` no longer collapses every sub-1 MiB file to a single constant. Its
+  64 KiB window starts at offset 1 MiB, so for smaller files the window was empty
+  and **all** of them hashed to `sha256(b"")[:8]` — making any small download or
+  model "verify" against arbitrary content. Small files now fall back to a
+  full-file digest so the value depends on the bytes.
+- `unpack`/`verify` now derive a custom-node's directory name as a single clean
+  path component. The name comes from the node URL's last segment; splitting only
+  on `/` meant that on Windows a segment like `x\..\loras` carried backslash
+  separators and `..` into the join, landing a clone in another subdirectory of
+  the root (e.g. `models/`) instead of under `custom_nodes/`. The segment is now
+  split on both separators and a bare `.`/`..` is rejected (`is_within` still
+  guards the final path).
 - `unpack` now confines all writes to the target ComfyUI root. A lockfile is
   shared between machines and therefore untrusted; previously a crafted entry
   with a `path` containing `..` or an absolute path could make `unpack --apply`
