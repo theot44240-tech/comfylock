@@ -149,5 +149,15 @@ def is_within(root: str | Path, candidate: str | Path) -> bool:
     (``../../x``) and absolute paths (``/etc/x``, ``C:\\x``). Used by both
     ``unpack`` (before writing) and ``verify`` (before reading/hashing).
     """
-    root_res = Path(root).resolve()
-    return root_res in Path(candidate).resolve().parents
+    try:
+        root_res = Path(root).resolve()
+        cand_res = Path(candidate).resolve()
+    except (OSError, ValueError):
+        # Resolving an untrusted lock-supplied path can fail: on Windows a name
+        # carrying characters illegal in a filename (e.g. ``*``/``?``) raises
+        # OSError [WinError 123], and an embedded NUL raises ValueError. An
+        # unresolvable path is never a safe descendant, and this guard must not
+        # raise on hostile input (it gates writes/reads in unpack and verify),
+        # so treat any such path as outside the root.
+        return False
+    return root_res in cand_res.parents

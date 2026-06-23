@@ -323,19 +323,34 @@ class UnpackTests(unittest.TestCase):
             self.assertEqual(res.errors, 1)
 
     def test_glob_chars_in_name_do_not_falsely_match(self):
-        # A model basename is matched *literally*, not as a glob. A name with a
-        # ``*`` must not be reported "present" just because an unrelated file
+        # A model basename is matched *literally*, not as a glob. ``[abc]`` is a
+        # glob character class (and a valid filename on every OS); it must not be
+        # reported "present" just because the unrelated file ``a.safetensors``
         # matches the pattern -- that would silently skip a required download.
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "ComfyUI"
             (root / "models" / "checkpoints").mkdir(parents=True)
-            (root / "models" / "checkpoints" / "unrelated.safetensors").write_bytes(b"x")
+            (root / "models" / "checkpoints" / "a.safetensors").write_bytes(b"x")
             lock = Lockfile(models=[Model(
-                "*.safetensors", url="https://h/x.safetensors",
+                "[abc].safetensors", url="https://h/x.safetensors",
                 hashes=[Hash("SHA256", "0" * 64)])])
             res = unpack(lock, root, dry_run=True)
             self.assertEqual(len(res.actions), 1, res.render())
             self.assertEqual(res.actions[0].kind, "download")
+
+    def test_illegal_pathchar_name_does_not_crash(self):
+        # A name with characters illegal in a filename (``*`` on Windows) is
+        # untrusted lock input. The path-containment guard must reject it without
+        # raising -- unpack handles the model (download on POSIX, unsafe-path skip
+        # on Windows) but never crashes with an OSError traceback.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "ComfyUI"
+            (root / "models").mkdir(parents=True)
+            lock = Lockfile(models=[Model(
+                "*.safetensors", url="https://h/x.safetensors",
+                hashes=[Hash("SHA256", "0" * 64)])])
+            res = unpack(lock, root, dry_run=True)  # must not raise
+            self.assertEqual(len(res.actions), 1, res.render())
 
     def test_bracketed_name_is_detected_present(self):
         # A real file whose name contains ``[...]`` must be found by the literal
