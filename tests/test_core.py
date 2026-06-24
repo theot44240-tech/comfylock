@@ -155,6 +155,21 @@ class MalformedLockRobustnessTests(unittest.TestCase):
         lock = serialize.loads(json.dumps({"models": [{"name": "m", "size": "big"}]}))
         self.assertIsNone(lock.models[0].size)
 
+    def test_infinite_size_falls_back_to_none(self):
+        # JSON ``1e400`` parses to a float ``inf``; ``int(inf)`` raises
+        # OverflowError (not the ValueError/TypeError the coercion caught), so a
+        # hostile ``size`` crashed verify/diff with an uncaught traceback. It must
+        # degrade to None like any other unusable value. (Literal ``1e400`` in the
+        # JSON text exercises the real parse path that produces inf.)
+        lock = serialize.loads('{"models":[{"name":"m","size":1e400}]}')
+        self.assertIsNone(lock.models[0].size)
+
+    def test_infinite_version_falls_back_to_default(self):
+        # Same inf trap on the ``version`` field: it must fall back to the schema
+        # default rather than raising OverflowError out of from_dict.
+        lock = serialize.loads('{"version":1e400,"models":[]}')
+        self.assertEqual(lock.version, 1)
+
     def test_non_dict_parameters_ignored(self):
         lock = serialize.loads(json.dumps({"parameters": [1, 2, 3]}))
         self.assertEqual(lock.parameters, {})
@@ -910,6 +925,26 @@ class SerializeErrorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "wf.json"
             p.write_text("{oops", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                serialize.read_workflow(p)
+
+    def test_read_non_utf8_lock_raises_runtime_error(self):
+        # A binary / mis-encoded lockfile makes ``read_text(encoding="utf-8")``
+        # raise UnicodeDecodeError (a ValueError). The CLI handler only catches
+        # FileNotFoundError/RuntimeError/OSError, so it escaped as a traceback.
+        # ``read`` must convert it to a clean RuntimeError that names the path.
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "bad.lock"
+            p.write_bytes(b'{"version":1,\xff\xfe"models":[]}')
+            with self.assertRaises(RuntimeError) as ctx:
+                serialize.read(p)
+            self.assertIn("bad.lock", str(ctx.exception))
+
+    def test_read_workflow_non_utf8_raises_runtime_error(self):
+        # Same non-UTF-8 trap on the ``pack`` workflow-read path.
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "wf.json"
+            p.write_bytes(b"\xff\xfe\x00bad")
             with self.assertRaises(RuntimeError):
                 serialize.read_workflow(p)
 

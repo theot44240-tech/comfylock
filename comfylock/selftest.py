@@ -329,6 +329,30 @@ def run_selftest() -> int:
         except RuntimeError:
             c.check(True, "malformed lockfile raises")
 
+        # --- a non-UTF-8 lockfile is a clean error, not a UnicodeDecodeError ---
+        # read_text(utf-8) raises UnicodeDecodeError (a ValueError) on binary bytes;
+        # the CLI handler catches only RuntimeError/OSError, so it escaped as a
+        # traceback. read() must convert it to a RuntimeError.
+        nonutf8 = Path(td) / "nonutf8.lock"
+        nonutf8.write_bytes(b'{"version":1,\xff\xfe"models":[]}')
+        try:
+            serialize.read(nonutf8)
+            c.check(False, "non-UTF-8 lockfile raises a clean error")
+        except RuntimeError:
+            c.check(True, "non-UTF-8 lockfile raises a clean error")
+        except UnicodeDecodeError:
+            c.check(False, "non-UTF-8 lockfile raises a clean error")
+
+        # --- an infinite numeric field coerces instead of crashing ---
+        # JSON ``1e400`` parses to float inf; ``int(inf)`` raises OverflowError
+        # (not the ValueError/TypeError the coercion caught) -> traceback on
+        # verify/diff. The field must degrade to None.
+        inflock = serialize.loads('{"version":1,"models":[{"name":"x","size":1e400}]}')
+        c.check(
+            len(inflock.models) == 1 and inflock.models[0].size is None,
+            "infinite size coerces to None (no OverflowError)",
+        )
+
     total = c.passed + c.failed
     print(f"selftest: {c.passed}/{total} checks passed.")
     return 0 if c.failed == 0 else 1

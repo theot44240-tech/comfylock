@@ -19,12 +19,15 @@ def _as_int(value: Any, default: int | None) -> int | None:
     Hand-authored locks may carry non-numeric ``version``/``size`` values
     (e.g. ``"abc"`` or a list). A bare ``int()`` would raise ValueError/TypeError
     that escapes the CLI error handler as a traceback, so degrade gracefully.
+    ``json``/``yaml`` also parse ``1e400`` / ``.inf`` to a float ``inf``, and
+    ``int(inf)`` raises OverflowError (``int(nan)`` raises ValueError); catch that
+    too so a hostile numeric field cannot crash verify/diff with a traceback.
     """
     if value is None:
         return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 

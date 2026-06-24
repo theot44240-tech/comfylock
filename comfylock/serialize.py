@@ -83,6 +83,12 @@ def read(path: str | Path) -> Lockfile:
         text = p.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"lockfile not found: {p}") from exc
+    except UnicodeDecodeError as exc:
+        # A lockfile is untrusted text. Non-UTF-8 bytes (a binary file, or a lock
+        # saved in another encoding) make ``read_text`` raise UnicodeDecodeError,
+        # a ValueError -- which the CLI handler (RuntimeError/OSError) does not
+        # catch, so it escaped as a traceback. Surface a clean error instead.
+        raise RuntimeError(f"{p}: not a UTF-8 text lockfile ({exc}).") from exc
     try:
         return loads(text)
     except RuntimeError as exc:
@@ -96,6 +102,10 @@ def read_workflow(path: str | Path) -> Any:
         text = p.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"workflow not found: {p}") from exc
+    except UnicodeDecodeError as exc:
+        # Same non-UTF-8 trap as ``read``: a UnicodeDecodeError (ValueError) from
+        # a binary/mis-encoded workflow file would crash ``pack`` with a traceback.
+        raise RuntimeError(f"{p}: not a UTF-8 text workflow ({exc}).") from exc
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:

@@ -94,6 +94,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertNotIn("Traceback", r.stderr)
 
+    def test_verify_non_utf8_lock_clean_error(self):
+        # A binary / mis-encoded lockfile raised UnicodeDecodeError (a ValueError),
+        # which the CLI handler did not catch -> traceback. Now a clean exit 2.
+        with tempfile.TemporaryDirectory() as td:
+            lock = Path(td) / "bad.lock"
+            lock.write_bytes(b'{"version":1,\xff\xfe"models":[]}')
+            r = run(["verify", str(lock)])
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("error:", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+
+    def test_verify_infinite_size_no_traceback(self):
+        # JSON ``1e400`` -> float inf -> ``int(inf)`` OverflowError escaped as a
+        # traceback. The field must coerce (to None) and verify must run cleanly.
+        with tempfile.TemporaryDirectory() as td:
+            lock = Path(td) / "inf.lock"
+            lock.write_text(
+                '{"version":1,"models":[{"name":"x.safetensors","size":1e400}]}')
+            r = run(["verify", str(lock), "-r", td])
+            self.assertNotIn("Traceback", r.stdout + r.stderr)
+            self.assertIn(r.returncode, (0, 1))
+
     def test_unpack_dry_run(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
