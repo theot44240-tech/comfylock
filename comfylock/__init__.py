@@ -4,9 +4,15 @@
 workflow parameters into one small, portable, verifiable lockfile.
 """
 
-__version__ = "0.2.0"
-SCHEMA_VERSION = 1
+__version__ = "0.3.0"
 
-from .model import FileNode, Hash, Lockfile, Model  # noqa: E402
+from .model import SCHEMA_VERSION, FileNode, Hash, Lockfile, Model  # noqa: E402
 
-__all__ = ["Lockfile", "Model", "Hash", "FileNode", "__version__", "SCHEMA_VERSION"]
+__all__ = [
+    "Lockfile",
+    "Model",
+    "Hash",
+    "FileNode",
+    "__version__",
+    "SCHEMA_VERSION",
+]

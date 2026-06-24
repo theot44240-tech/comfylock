@@ -17,7 +17,7 @@ jobs:
       - name: Install dev tools
         run: pip install ruff mypy
       - name: Ruff
-        run: ruff check comfylock tests panel
+        run: ruff check comfylock tests panel scripts
       - name: Mypy
         run: mypy comfylock
 
@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.9", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,5 +40,71 @@ jobs:
       - name: Self-test
         run: python -m comfylock selftest
       - name: Round-trip example
+        run: comfy-lock diff examples/workflow.lock examples/workflow.lock
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with dev extras
+        run: pip install -e ".[dev]"
+      - name: Pytest with coverage
+        run: pytest --cov=comfylock --cov-report=term-missing --cov-fail-under=60 tests
+
+  schema-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with dev extras
+        run: pip install -e ".[dev]"
+      - name: Validate example against the schema
         run: |
-          comfy-lock diff examples/workflow.lock examples/workflow.lock
+          python - <<'PY'
+          import json, jsonschema
+          schema = json.load(open("schema/comfylock-v2.schema.json"))
+          lock = json.load(open("examples/workflow.lock"))
+          jsonschema.validate(lock, schema)
+          print("examples/workflow.lock validates against the v2 schema.")
+          PY
+      - name: Schema export matches the committed file
+        run: |
+          python - <<'PY'
+          from comfylock.exporters.json_schema import to_json_schema
+          committed = open("schema/comfylock-v2.schema.json", encoding="utf-8").read()
+          assert to_json_schema() == committed, "schema/ is out of date; re-run export."
+          print("Committed schema matches the exporter.")
+          PY
+
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        run: |
+          pip install build
+          python -m build
+      - name: Install the wheel in a fresh venv and self-test
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          /tmp/venv/bin/comfy-lock --version
+          /tmp/venv/bin/comfy-lock selftest
+
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check README links resolve
+        run: python scripts/check_readme_links.py

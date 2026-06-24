@@ -131,6 +131,110 @@ class CliTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("dry run", r.stdout)
 
+    # ----------------------------------------------------------------- #
+    # v0.3.0 subcommands
+    # ----------------------------------------------------------------- #
+    EXAMPLE = ROOT / "examples" / "workflow.lock"
+
+    def test_inspect(self):
+        r = run(["inspect", str(self.EXAMPLE), "--no-color"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("MODELS", r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_inspect_json(self):
+        r = run(["inspect", str(self.EXAMPLE), "--json"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["version"], 2)
+
+    def test_export_formats(self):
+        for fmt in ("markdown", "manager-snapshot", "dockerfile", "json-schema"):
+            r = run(["export", str(self.EXAMPLE), "--format", fmt])
+            self.assertEqual(r.returncode, 0, fmt + ": " + r.stderr)
+            self.assertTrue(r.stdout.strip(), fmt)
+
+    def test_export_to_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "snap.json"
+            r = run(["export", str(self.EXAMPLE), "--format", "manager-snapshot", "-o", str(out)])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(out.exists())
+
+    def test_manager_import_round_trip(self):
+        with tempfile.TemporaryDirectory() as td:
+            snap = Path(td) / "snapshot.json"
+            r = run(["export", str(self.EXAMPLE), "--format", "manager-snapshot", "-o", str(snap)])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = Path(td) / "from_snap.lock"
+            r = run(["manager-import", str(snap), "-o", str(out)])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(out.exists())
+
+    def test_merge(self):
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / "a.lock"
+            b = Path(td) / "b.lock"
+            a.write_text(json.dumps({"version": 2, "custom_nodes": {"git": {"https://x.git": "a" * 40}}}))
+            b.write_text(json.dumps({"version": 2, "custom_nodes": {"git": {"https://y.git": "b" * 40}}}))
+            out = Path(td) / "merged.lock"
+            r = run(["merge", str(a), str(b), "-o", str(out)])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(out.exists())
+
+    def test_completions(self):
+        for shell in ("bash", "zsh", "fish", "powershell"):
+            r = run(["completions", "--shell", shell])
+            self.assertEqual(r.returncode, 0, shell)
+            self.assertIn("pack", r.stdout)
+
+    def test_gc_dry_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "models" / "checkpoints").mkdir(parents=True)
+            (root / "models" / "checkpoints" / "orphan.safetensors").write_bytes(b"x" * 32)
+            r = run(["gc", "-r", str(root), "--locks-dir", str(root)])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("orphan.safetensors", r.stdout)
+
+    def test_gc_requires_root(self):
+        r = run(["gc"])
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("required", r.stderr)
+
+    def test_pack_strict_missing_model(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wf = root / "wf.flow.json"
+            wf.write_text(json.dumps({"nodes": [{"widgets_values": ["absent.safetensors"]}]}))
+            r = run(["pack", str(wf), "-o", str(root / "wf.lock"), "-r", str(root), "--strict"])
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("missing", r.stderr.lower())
+            self.assertNotIn("Traceback", r.stderr)
+
+    def test_pack_lock_version_1(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wf = root / "wf.flow.json"
+            wf.write_text(json.dumps({"nodes": []}))
+            out = root / "wf.lock"
+            r = run(["pack", str(wf), "-o", str(out), "--lock-version", "1"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = json.loads(out.read_text())
+            self.assertEqual(data["version"], 1)
+            self.assertNotIn("comfylock_version", data)
+
+    def test_verify_check_sig_missing(self):
+        # No .asc present -> clean exit 2, no traceback.
+        r = run(["verify", str(self.EXAMPLE), "--check-sig"])
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("signature", r.stderr.lower())
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_sign_missing_file(self):
+        r = run(["sign", "nope.lock"])
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("Traceback", r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

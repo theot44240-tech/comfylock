@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an improvement to ComfyLock
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ComfyLock aims for a small surface with deep correctness. A good feature
+        request comes with a concrete user story — what are you trying to do?
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The user story, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project constraints
+      options:
+        - label: This keeps the zero-dependency core (any new dep goes behind an extra).
+        - label: This is backward-compatible with existing v1/v2 lockfiles.
