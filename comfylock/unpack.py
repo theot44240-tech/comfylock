@@ -7,10 +7,12 @@ Downloads use urllib, so ``file://`` URLs work for offline/testing scenarios.
 from __future__ import annotations
 
 import re
-import urllib.request
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import fetcher
 from .hashes import STRONG, compute
 from .model import Lockfile, Model
 from .scan import git, head_commit, is_git_repo, is_within
@@ -142,11 +144,12 @@ def unpack(
     comfyui_root: str | Path,
     dry_run: bool = True,
     download_models: bool = True,
+    jobs: int = 1,
 ) -> UnpackResult:
     root = Path(comfyui_root)
     result = UnpackResult()
 
-    # --- Custom git nodes ---
+    # --- Custom git nodes (sequential: git is not safe to parallelise here) ---
     for url, commit in sorted(lock.git_nodes.items()):
         if not _safe_clone_url(url):
             result.actions.append(
@@ -177,14 +180,24 @@ def unpack(
 
     # --- Models ---
     if download_models:
+        planned: list[tuple[Model, Action]] = []
         for m in lock.models:
             if not _model_present(root, m):
                 mact = _plan_model(root, m)
                 if mact is None:
                     continue
-                if not dry_run and mact.kind == "download":
-                    _do_download(root, m, mact)
                 result.actions.append(mact)
+                if not dry_run and mact.kind == "download":
+                    planned.append((m, mact))
+        if planned and not dry_run:
+            if jobs > 1 and len(planned) > 1:
+                # Each download writes its own confined path and verifies its own
+                # hash, so they are independent; run up to ``jobs`` at a time.
+                with ThreadPoolExecutor(max_workers=jobs) as ex:
+                    list(ex.map(lambda pm: _do_download(root, pm[0], pm[1]), planned))
+            else:
+                for m, mact in planned:
+                    _do_download(root, m, mact)
 
     return result
 
@@ -254,10 +267,10 @@ def _do_checkout(node_dir: Path, commit: str, act: Action) -> None:
 
 
 def _do_download(root: Path, m: Model, act: Action) -> None:
-    if not m.url:
+    urls = m.urls()  # primary URL first, then any v2 mirrors
+    if not urls:
         act.error = "no url"
         return
-    url = m.url
     dest = root / (m.paths[0] if m.paths else _default_dest(m))
     if not _within(root, dest):  # defense in depth; _plan_model already filters
         act.error = "unsafe path"
@@ -268,14 +281,14 @@ def _do_download(root: Path, m: Model, act: Action) -> None:
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # file:// is intentional (offline/testing, see module docstring); the
-        # written path is confined to the root by _within above, and the result
-        # is integrity-checked against the lock's hash below.
-        urllib.request.urlretrieve(url, dest)  # noqa: S310
+        # The download is confined to ``dest`` (within the root, checked above),
+        # tries the primary URL then each mirror, and is integrity-checked against
+        # the lock's strong hash below. Progress only when attached to a terminal.
+        fetcher.download(urls, dest, resume=True, progress=sys.stderr.isatty())
     except Exception as exc:  # pragma: no cover - network dependent
         act.error = f"download failed: {exc}"
         return
-    # Integrity check against the first recomputable hash in the lock.
+    # Integrity check against the first recomputable strong hash in the lock.
     if compute(dest, ht) != m.hash_of(ht):
         # Don't leave unverified bytes where ComfyUI would load them, or where a
         # later run's basename search would treat the model as already present.

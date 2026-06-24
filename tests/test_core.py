@@ -148,8 +148,9 @@ class MalformedLockRobustnessTests(unittest.TestCase):
     -- so a bare int()/dict() on untrusted input escapes as a traceback."""
 
     def test_non_numeric_version_falls_back(self):
+        from comfylock.model import SCHEMA_VERSION
         lock = serialize.loads(json.dumps({"version": "abc"}))
-        self.assertEqual(lock.version, 1)
+        self.assertEqual(lock.version, SCHEMA_VERSION)
 
     def test_garbage_size_falls_back_to_none(self):
         lock = serialize.loads(json.dumps({"models": [{"name": "m", "size": "big"}]}))
@@ -167,8 +168,9 @@ class MalformedLockRobustnessTests(unittest.TestCase):
     def test_infinite_version_falls_back_to_default(self):
         # Same inf trap on the ``version`` field: it must fall back to the schema
         # default rather than raising OverflowError out of from_dict.
+        from comfylock.model import SCHEMA_VERSION
         lock = serialize.loads('{"version":1e400,"models":[]}')
-        self.assertEqual(lock.version, 1)
+        self.assertEqual(lock.version, SCHEMA_VERSION)
 
     def test_non_dict_parameters_ignored(self):
         lock = serialize.loads(json.dumps({"parameters": [1, 2, 3]}))

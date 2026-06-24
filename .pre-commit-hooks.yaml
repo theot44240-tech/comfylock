@@ -1,0 +1,15 @@
+- id: comfylock-verify
+  name: ComfyLock — verify lockfile not drifted
+  description: Check the ComfyUI environment against committed .lock files.
+  language: python
+  entry: comfy-lock verify
+  args: ["--no-hash"]
+  files: \.lock$
+
+- id: comfylock-diff
+  name: ComfyLock — assert lockfile unchanged
+  description: Fail if a .lock differs from its committed version.
+  language: python
+  entry: comfy-lock diff
+  args: ["--exit-code"]
+  files: \.lock$

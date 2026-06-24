@@ -5,6 +5,62 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-24
+
+### Added
+
+- `comfy-lock inspect` — a rich, human-readable summary of a lockfile (aligned
+  columns, optional colour, `--json` to re-emit canonical JSON for `jq`).
+- `comfy-lock export` — render a lock as Markdown, a ComfyUI-Manager snapshot, a
+  reproducible Dockerfile, or the lock JSON Schema (`--format <target>`).
+- `comfy-lock manager-import` — build a lock from a ComfyUI-Manager `snapshot.json`
+  (the inverse of `export --format manager-snapshot`).
+- `comfy-lock merge` — combine several workflow locks into one environment lock,
+  with `--strategy first` (keep the earliest pin, warn) or `strict` (fail on any
+  conflict).
+- `comfy-lock gc` — find model files under `models/` that no lock references, with
+  a dry-run listing and an opt-in, confirmed `--delete`.
+- `comfy-lock update` — refresh pinned node commits / model hashes / parameters in
+  place without a full re-pack (`--nodes`, `--models`, `--params`, `--dry-run`;
+  backs up the overwritten lock to `*.bak`).
+- `comfy-lock sign` and `verify --check-sig` — detached GPG signatures
+  (`<lock>.asc`) for trusted lock distribution.
+- `comfy-lock init` — an interactive first-run wizard (stdlib `input()`, graceful
+  in non-interactive contexts).
+- `comfy-lock completions --shell <bash|zsh|fish|powershell>` — shell completion
+  scripts.
+- `pack --strict` (fail if a referenced model is missing on disk) and
+  `verify --strict` (treat warnings as failures).
+- Lock schema **v2**: per-model download `mirrors`, Civitai/HuggingFace metadata
+  (`civitai_model_id`, `civitai_version_id`, `hf_repo_id`, `hf_filename`), and
+  lock-level `comfylock_version`, opt-in `provenance`, and `thumbnail` fields.
+  v1 locks still read and write unchanged; `pack --lock-version 1` emits v1.
+- `comfylock/fetcher.py` — a HuggingFace/Civitai-aware download engine with
+  resume (HTTP `Range`), a stderr progress meter, and mirror fallback, used by
+  `unpack`. `unpack --apply --jobs N` downloads up to N models in parallel.
+- `schema/comfylock-v2.schema.json` — a JSON Schema (draft-07) for `.lock` files,
+  emitted by `export --format json-schema` and validated in CI.
+- `.pre-commit-hooks.yaml` — `comfylock-verify` / `comfylock-diff` pre-commit hooks.
+- `docs/` — getting-started, CI/CD, Docker, shell completions, signing,
+  ComfyUI-Manager interop, lockfile schema, pre-commit, and security guides.
+- Repository hygiene: `SECURITY.md`, issue/PR templates, `FUNDING.yml`, and a
+  Dependabot configuration.
+
+### Changed
+
+- The default lockfile schema is now **v2**. Use `pack --lock-version 1` for a
+  v1-compatible lock.
+- CI now covers Python 3.9–3.13 on Linux/macOS/Windows and adds lint,
+  schema-validation, wheel-build, and docs-link jobs.
+
+### Security
+
+- The download engine surfaces a clear `401 Unauthorized` hint (set `HF_TOKEN` /
+  `CIVITAI_API_KEY`) and only ever writes to the confined model destination; every
+  download — including via a mirror — is still integrity-checked against the lock's
+  strong hash before it is accepted (`unpack`'s existing containment and
+  strong-hash gate are unchanged).
+
 ## [0.2.0] - 2026-06-24
 
 ### Added
@@ -173,5 +229,6 @@ Initial release.
 - Apache-2.0 license, CI on Linux/macOS/Windows for Python 3.8/3.11/3.12, and a
   tag-driven release workflow.
 
+[0.3.0]: https://github.com/theot44240-tech/comfylock/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/theot44240-tech/comfylock/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/theot44240-tech/comfylock/releases/tag/v0.1.0

@@ -10,10 +10,11 @@
 portable, verifiable `.lock` file — so the workflow that works on your machine works on theirs.**
 
 [![CI](https://github.com/theot44240-tech/comfylock/actions/workflows/ci.yml/badge.svg)](https://github.com/theot44240-tech/comfylock/actions/workflows/ci.yml)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/comfylock)](https://pypi.org/project/comfylock/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)](https://www.python.org/)
 [![Zero dependencies](https://img.shields.io/badge/dependencies-0-success)](#-why-its-different)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-66%20unit%20%2B%2029%20selftest-brightgreen)](#-quality--proof-points)
+[![Tests](https://img.shields.io/badge/tests-178%20unit%20%2B%2054%20selftest-brightgreen)](#-quality--proof-points)
 [![Status: Beta](https://img.shields.io/badge/status-beta-yellow)](CHANGELOG.md)
 
 [![Stars](https://img.shields.io/github/stars/theot44240-tech/comfylock?style=social)](https://github.com/theot44240-tech/comfylock/stargazers)
@@ -180,20 +181,44 @@ artifact that pins all three layers — and stays dependency-free.
 ## 🛠️ CLI reference
 
 ```text
-comfy-lock pack    <workflow.json>  [-o out.lock] [-r COMFYUI_ROOT] [--hash TYPE]... [--no-cache]
-comfy-lock verify  <workflow.lock>  [-r COMFYUI_ROOT] [--no-hash] [--no-cache]
-comfy-lock unpack  <workflow.lock>   -r COMFYUI_ROOT  [--apply] [--no-models]
+comfy-lock pack    <workflow.json>  [-o out.lock] [-r ROOT] [--hash TYPE]... [--lock-version 1|2] [--strict] [--provenance]
+comfy-lock verify  <workflow.lock>  [-r ROOT] [--no-hash] [--strict] [--check-sig]
+comfy-lock unpack  <workflow.lock>   -r ROOT  [--apply] [--no-models] [--jobs N]
 comfy-lock diff    <old.lock> <new.lock> [--exit-code]
+comfy-lock inspect <workflow.lock>  [--json] [--no-color]
+comfy-lock export  <workflow.lock>  --format markdown|manager-snapshot|dockerfile|json-schema [-o out]
+comfy-lock manager-import <snapshot.json> [-o out.lock] [-r ROOT]
+comfy-lock merge   <a.lock> <b.lock>... -o combined.lock [--strategy first|strict]
+comfy-lock gc       -r ROOT  [--locks-dir .] [--dry-run] [--delete]
+comfy-lock update  <workflow.lock>   -r ROOT  [--nodes] [--models] [--params] [--dry-run] [-o out]
+comfy-lock sign    <workflow.lock>  [--key KEY] [--sigstore]
+comfy-lock init
+comfy-lock completions --shell bash|zsh|fish|powershell
 comfy-lock selftest
 ```
 
 | Command | What it does |
 | --- | --- |
-| `pack` | Read a workflow, scan the ComfyUI install, write a `.lock` with node commits, model hashes, and parameters. |
-| `verify` | Compare the current environment to a lock. **Exit code is non-zero on any mismatch** — drop it straight into CI. |
-| `unpack` | Dry-run by default; with `--apply`, clone/checkout custom nodes and download missing models, verifying hashes after each download. |
+| `pack` | Read a workflow, scan the ComfyUI install, write a `.lock` with node commits, model hashes, and parameters. `--strict` fails on a missing model. |
+| `verify` | Compare the current environment to a lock. **Exit code is non-zero on any mismatch** — drop it straight into CI. `--check-sig` requires a valid signature first. |
+| `unpack` | Dry-run by default; with `--apply`, clone/checkout custom nodes and download missing models (`--jobs N` in parallel), verifying hashes after each download. |
 | `diff` | Semantic comparison of two locks. `--exit-code` returns 1 when they differ, like `git diff --exit-code`. |
+| `inspect` | A rich, human-readable summary of a lock (`--json` to re-emit for `jq`). |
+| `export` | Render a lock as Markdown, a ComfyUI-Manager snapshot, a Dockerfile, or its JSON Schema. |
+| `manager-import` | Build a lock from a ComfyUI-Manager `snapshot.json`. |
+| `merge` | Combine several locks into one environment lock (`first`/`strict` conflict handling). |
+| `gc` | Find (and optionally delete) model files no lock references. |
+| `update` | Refresh pinned commits / hashes / params in place, without a full re-pack. |
+| `sign` | Write a detached GPG signature `<lock>.asc` for trusted distribution. |
+| `init` | Interactive first-run wizard. |
+| `completions` | Emit a shell completion script. |
 | `selftest` | Run the built-in, offline self-test suite. |
+
+See the [`docs/`](docs/getting-started.md) directory for per-feature guides:
+[CI/CD](docs/ci-cd.md) · [Docker](docs/docker.md) ·
+[shell completions](docs/shell-completions.md) · [signed locks](docs/signed-locks.md) ·
+[ComfyUI-Manager interop](docs/manager-interop.md) · [lockfile schema](docs/lockfile-schema.md) ·
+[pre-commit](docs/pre-commit.md) · [security](docs/security.md).
 
 <details>
 <summary><b>More usage examples</b></summary>
@@ -344,17 +369,16 @@ linting and tests.
 ## 📦 Installation
 
 ```bash
-# Recommended today (not yet on PyPI):
-pip install "git+https://github.com/theot44240-tech/comfylock.git"
+pip install comfylock
 ```
 
 **Optional extras:**
 
 ```bash
-# YAML lockfiles
-pip install "comfylock[yaml] @ git+https://github.com/theot44240-tech/comfylock.git"
-# Fast BLAKE3 hashing for large models
-pip install "comfylock[blake3] @ git+https://github.com/theot44240-tech/comfylock.git"
+pip install "comfylock[yaml]"      # YAML lockfiles
+pip install "comfylock[blake3]"    # fast BLAKE3 hashing for large models
+pip install "comfylock[hf]"        # HuggingFace Hub downloads (cached / gated models)
+pip install "comfylock[sigstore]"  # keyless Sigstore signing (CI)
 ```
 
 **From source (for development):**
@@ -365,7 +389,9 @@ cd comfylock
 pip install -e ".[dev]"
 ```
 
-> A PyPI release enabling plain `pip install comfylock` is planned — see the [roadmap](#-roadmap).
+> The PyPI publish workflow ships on tag once a [Trusted Publisher](https://docs.pypi.org/trusted-publishers/)
+> is configured for the repo; until then, install from source with
+> `pip install "git+https://github.com/theot44240-tech/comfylock.git"`.
 
 ---
 
@@ -375,10 +401,11 @@ ComfyLock is small, but it's tested like it isn't.
 
 | Metric | Value |
 | --- | --- |
-| 🧪 Unit tests | **66** (`pytest`) |
-| 🔬 Built-in self-test checks | **29** (`comfy-lock selftest`, fully offline) |
-| 🖥️ CI matrix | **Linux · macOS · Windows** × Python **3.9 / 3.11 / 3.12** |
+| 🧪 Unit tests | **178** (`python -m unittest discover -s tests`) |
+| 🔬 Built-in self-test checks | **54** (`comfy-lock selftest`, fully offline) |
+| 🖥️ CI matrix | **Linux · macOS · Windows** × Python **3.9 / 3.10 / 3.11 / 3.12 / 3.13** |
 | 🧹 Static analysis | `ruff` + `mypy` (typed, ships `py.typed`) |
+| 🧱 CI jobs | lint · test matrix · coverage · schema-validate · wheel build+install · docs-links |
 | 📦 Runtime dependencies | **0** (pure standard library) |
 
 Every release also round-trips the example lockfile in CI and self-tests the *built* package, not
@@ -449,6 +476,41 @@ Hashing large model files takes time. ComfyLock caches results by size + mtime, 
 are fast. Use `verify --no-hash` to skip model hashing entirely when you only care about nodes.
 </details>
 
+<details>
+<summary><b>How do I share a workflow with someone who uses ComfyUI-Manager?</b></summary>
+
+`comfy-lock export --format manager-snapshot` emits a CM-compatible `snapshot.json`, and
+`comfy-lock manager-import` reads one back. See [manager-interop.md](docs/manager-interop.md).
+</details>
+
+<details>
+<summary><b>Can I use ComfyLock in a Docker-based ComfyUI deployment?</b></summary>
+
+Yes — `comfy-lock export --format dockerfile` produces a reproducible Dockerfile that pins the core
+commit and clones every node at its locked commit. See [docker.md](docs/docker.md).
+</details>
+
+<details>
+<summary><b>How do I download a model that requires a HuggingFace token?</b></summary>
+
+Install the extra (`pip install "comfylock[hf]"`) and set `HF_TOKEN`. ComfyLock uses the Hub for
+caching/resuming and falls back to plain HTTPS otherwise. Civitai gated models read `CIVITAI_API_KEY`.
+</details>
+
+<details>
+<summary><b>How do I verify a lockfile someone sent me wasn't tampered with?</b></summary>
+
+`comfy-lock sign` writes a detached GPG signature; the recipient runs `comfy-lock verify --check-sig`,
+which refuses an unsigned or modified lock before touching anything. See [signed-locks.md](docs/signed-locks.md).
+</details>
+
+<details>
+<summary><b>My disk is filling up with models — which ones aren't needed?</b></summary>
+
+`comfy-lock gc -r ~/ComfyUI` lists model files under `models/` that no `.lock` references, with the
+reclaimable size. Add `--delete` (interactive confirmation) to remove them.
+</details>
+
 ---
 
 ## 🗺️ Roadmap
@@ -459,21 +521,21 @@ timeline
     section Shipped
         v0.1.0 : pack / verify / unpack / diff : multi-hash + size·mtime cache : ComfyUI panel
         v0.2.0 : reproducible packs (SOURCE_DATE_EPOCH) : diff --exit-code for CI : typed model routing
-    section In progress
-        Security hardening : write path-containment : refuse unverified downloads
+        v0.3.0 : inspect / export / merge / gc / update / sign / init / completions : HuggingFace + Civitai downloads (auth · resume · mirrors) : parallel unpack --jobs : lock schema v2 : ComfyUI panel v2 : pre-commit + JSON Schema + docs
     section Next
-        v0.3.0 : PyPI release (pip install comfylock) : resolve unknown nodes via registry
+        v0.4.0 : comfy-lock doctor (auto-fix drift) : node/model search via registry : lock templates
     section Later
-        Smarter fetches : HuggingFace / Civitai aware : auth · resume · mirrors
-        Interop : ComfyUI-Manager snapshot import/export : embedded workflow thumbnail
+        Distributed lock registry : share locks via URL : VSCode extension
+        SBOM generation : webhook on upstream node/model updates
 ```
 
-- [ ] PyPI release (plain `pip install comfylock`).
-- [ ] Resolve unknown nodes through the ComfyUI registry automatically.
-- [ ] HuggingFace / Civitai aware downloads (auth, resume, mirrors).
-- [ ] `pack --strict` to fail when any referenced model can't be located.
-- [ ] ComfyUI-Manager snapshot import/export for interoperability.
-- [ ] Optional embedded thumbnail / preview of the workflow in the lock.
+- [x] `inspect` / `export` / `manager-import` / `merge` / `gc` / `update` / `sign` / `init` / `completions`.
+- [x] HuggingFace / Civitai aware downloads (auth, resume, mirrors) + parallel `unpack --jobs`.
+- [x] `pack --strict` and lock schema v2 (mirrors, provenance, HF/Civitai metadata).
+- [x] ComfyUI-Manager snapshot import/export for interoperability.
+- [ ] PyPI publish on tag (pending Trusted Publisher configuration).
+- [ ] `comfy-lock doctor` — auto-fix common drift.
+- [ ] Resolve unknown nodes/models through the ComfyUI registry automatically.
 
 ---
 

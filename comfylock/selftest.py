@@ -353,6 +353,143 @@ def run_selftest() -> int:
             "infinite size coerces to None (no OverflowError)",
         )
 
+        # ----------------------------------------------------------------- #
+        # v0.3.0 features
+        # ----------------------------------------------------------------- #
+        from .completions import SHELLS, completion_script
+        from .exporters import FORMATS, export
+        from .exporters.json_schema import LOCK_SCHEMA, to_json_schema
+        from .exporters.manager_snapshot import from_manager_snapshot
+        from .fetcher import detect_origin, download, prepare_url
+        from .gc import find_orphans
+        from .inspect import inspect_text
+        from .merge import MergeConflict, merge_locks
+        from .model import SCHEMA_VERSION
+
+        c.check(SCHEMA_VERSION == 2, "default schema is v2")
+
+        # --- v2 model fields round-trip; v1 output omits them ---
+        v2model = Model(
+            "x.safetensors", url="https://h/x", mirrors=["hf://a/b/x"],
+            hashes=[Hash("SHA256", "a" * 64)], hf_repo_id="a/b",
+            civitai_model_id=7,
+        )
+        v2lock = Lockfile(models=[v2model], comfylock_version="0.3.0", version=2)
+        rt = serialize.loads(serialize.dumps_json(v2lock))
+        c.check(
+            rt.models[0].mirrors == ["hf://a/b/x"]
+            and rt.models[0].hf_repo_id == "a/b"
+            and rt.models[0].civitai_model_id == 7
+            and rt.comfylock_version == "0.3.0",
+            "v2 model + lock fields round-trip",
+        )
+        v1dict = Lockfile(models=[v2model], version=1, comfylock_version="0.3.0").to_dict()
+        c.check(
+            "comfylock_version" not in v1dict and "mirrors" not in v1dict["models"][0],
+            "v1 output omits v2-only fields",
+        )
+        c.check(
+            v2model.urls() == ["https://h/x", "hf://a/b/x"],
+            "Model.urls() lists primary then mirrors",
+        )
+
+        # --- pack --strict ---
+        from .pack import StrictError
+        from .pack import build_lock as _bl
+
+        strict_wf = {"nodes": [{"widgets_values": ["absent.safetensors"]}]}
+        try:
+            _bl(strict_wf, "w", root, hash_types=["SHA256"], strict=True)
+            c.check(False, "pack --strict rejects a missing model")
+        except StrictError:
+            c.check(True, "pack --strict rejects a missing model")
+
+        # --- inspect ---
+        ins = inspect_text(lock)
+        c.check(
+            "MODELS" in ins and "model.safetensors" in ins,
+            "inspect renders the model section",
+        )
+
+        # --- export: all formats non-empty; json-schema matches source ---
+        c.check(
+            all(export(lock, f).strip() for f in FORMATS),
+            "every export format emits output",
+        )
+        c.check(json.loads(to_json_schema()) == LOCK_SCHEMA, "json-schema export is valid")
+
+        # --- manager-snapshot round-trip ---
+        snap_lock = Lockfile(
+            comfyui="abc123",
+            git_nodes={"https://github.com/a/b.git": "d" * 40},
+        )
+        from .exporters import to_manager_snapshot
+
+        snap = json.loads(to_manager_snapshot(snap_lock))
+        back, _w = from_manager_snapshot(snap)
+        c.check(
+            back.comfyui == "abc123" and "https://github.com/a/b.git" in back.git_nodes,
+            "manager snapshot round-trips nodes + commit",
+        )
+
+        # --- merge: conflict detection under strict ---
+        ma = Lockfile(git_nodes={"https://x.git": "a" * 40})
+        mb = Lockfile(git_nodes={"https://x.git": "b" * 40})
+        merged_first, mw = merge_locks([ma, mb], strategy="first")
+        c.check(
+            merged_first.git_nodes["https://x.git"] == "a" * 40 and bool(mw),
+            "merge --strategy first keeps the first pin and warns",
+        )
+        try:
+            merge_locks([ma, mb], strategy="strict")
+            c.check(False, "merge --strategy strict raises on conflict")
+        except MergeConflict:
+            c.check(True, "merge --strategy strict raises on conflict")
+
+        # --- gc: orphan detection ---
+        gcroot = Path(td) / "gcroot"
+        (gcroot / "models" / "checkpoints").mkdir(parents=True)
+        (gcroot / "models" / "checkpoints" / "keep.safetensors").write_bytes(b"K" * 10)
+        (gcroot / "models" / "checkpoints" / "drop.safetensors").write_bytes(b"D" * 10)
+        gclocks = Path(td) / "gclocks"
+        gclocks.mkdir()
+        serialize.write(
+            Lockfile(models=[Model("keep.safetensors",
+                                   paths=["models/checkpoints/keep.safetensors"])]),
+            gclocks / "a.lock",
+        )
+        gcres = find_orphans(gcroot, locks_dir=gclocks)
+        orphan_names = {o.path.name for o in gcres.orphans}
+        c.check(
+            "drop.safetensors" in orphan_names and "keep.safetensors" not in orphan_names,
+            "gc identifies the unreferenced model only",
+        )
+
+        # --- completions: every shell emits a non-empty script ---
+        c.check(
+            all("pack" in completion_script(s) for s in SHELLS),
+            "completions emitted for every shell",
+        )
+
+        # --- fetcher: origin detection + civitai token + mirror fallback ---
+        c.check(
+            detect_origin("hf://a/b/c") == "huggingface"
+            and detect_origin("https://civitai.com/x") == "civitai"
+            and prepare_url("hf://o/r/f.safetensors")
+            == "https://huggingface.co/o/r/resolve/main/f.safetensors",
+            "fetcher detects origins and rewrites hf://",
+        )
+        fsrc = Path(td) / "fetch_src.bin"
+        fsrc.write_bytes(b"FETCH" * 20)
+        fdest = Path(td) / "fetch_dest" / "out.bin"
+        bad_uri = (Path(td) / "fetch_missing.bin").resolve().as_uri()
+        used = download([bad_uri, fsrc.resolve().as_uri()], fdest, progress=False)
+        c.check(
+            fdest.exists() and fdest.read_bytes() == fsrc.read_bytes()
+            and used == fsrc.resolve().as_uri(),
+            "fetcher falls back from a bad URL to a working mirror",
+        )
+
     total = c.passed + c.failed
     print(f"selftest: {c.passed}/{total} checks passed.")
     return 0 if c.failed == 0 else 1

@@ -10,7 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-SCHEMA_VERSION = 1
+# Schema v2 (current) adds optional, backward-compatible fields: download
+# mirrors and Civitai/HuggingFace metadata on models, plus tool-version and
+# provenance/thumbnail metadata on the lock. A v1 lock omits all of them and
+# still reads/writes correctly; ``pack --lock-version 1`` emits v1 on request.
+SCHEMA_VERSION = 2
 
 
 def _as_int(value: Any, default: int | None) -> int | None:
@@ -65,6 +69,12 @@ class Model:
     type: str | None = None
     size: int | None = None
     present: bool = True
+    # --- schema v2 (optional) ---
+    mirrors: list[str] = field(default_factory=list)
+    civitai_model_id: int | None = None
+    civitai_version_id: int | None = None
+    hf_repo_id: str | None = None
+    hf_filename: str | None = None
 
     def hash_of(self, hash_type: str) -> str | None:
         for h in self.hashes:
@@ -72,10 +82,20 @@ class Model:
                 return h.hash
         return None
 
-    def to_dict(self) -> dict[str, Any]:
+    def urls(self) -> list[str]:
+        """Ordered, de-duplicated download URLs: the primary first, then mirrors."""
+        seen: dict[str, None] = {}
+        for u in ([self.url] if self.url else []) + self.mirrors:
+            if u and u not in seen:
+                seen[u] = None
+        return list(seen)
+
+    def to_dict(self, v2: bool = True) -> dict[str, Any]:
         d: dict[str, Any] = {"name": self.name}
         if self.url:
             d["url"] = self.url
+        if v2 and self.mirrors:
+            d["mirrors"] = list(self.mirrors)
         if self.paths:
             d["paths"] = [{"path": p} for p in self.paths]
         if self.hashes:
@@ -84,6 +104,15 @@ class Model:
             d["type"] = self.type
         if self.size is not None:
             d["size"] = self.size
+        if v2:
+            if self.civitai_model_id is not None:
+                d["civitai_model_id"] = self.civitai_model_id
+            if self.civitai_version_id is not None:
+                d["civitai_version_id"] = self.civitai_version_id
+            if self.hf_repo_id:
+                d["hf_repo_id"] = self.hf_repo_id
+            if self.hf_filename:
+                d["hf_filename"] = self.hf_filename
         if not self.present:
             d["present"] = False
         return d
@@ -105,15 +134,27 @@ class Model:
             for h in (raw_hashes if isinstance(raw_hashes, list) else [])
             if isinstance(h, dict)
         ]
-        size = d.get("size")
+        raw_mirrors = d.get("mirrors", []) or []
+        mirrors = [
+            str(u)
+            for u in (raw_mirrors if isinstance(raw_mirrors, list) else [])
+            if isinstance(u, str) and u
+        ]
+        hf_repo = d.get("hf_repo_id")
+        hf_file = d.get("hf_filename")
         return Model(
             name=str(d.get("name", "")),
             url=d.get("url"),
             paths=[p for p in paths if p],
             hashes=hashes,
             type=d.get("type"),
-            size=_as_int(size, None),
+            size=_as_int(d.get("size"), None),
             present=bool(d.get("present", True)),
+            mirrors=mirrors,
+            civitai_model_id=_as_int(d.get("civitai_model_id"), None),
+            civitai_version_id=_as_int(d.get("civitai_version_id"), None),
+            hf_repo_id=str(hf_repo) if isinstance(hf_repo, str) and hf_repo else None,
+            hf_filename=str(hf_file) if isinstance(hf_file, str) and hf_file else None,
         )
 
 
@@ -143,14 +184,28 @@ class Lockfile:
     models: list[Model] = field(default_factory=list)
     parameters: dict[str, Any] = field(default_factory=dict)
     version: int = SCHEMA_VERSION
+    # --- schema v2 (optional) ---
+    comfylock_version: str | None = None
+    provenance: dict[str, Any] = field(default_factory=dict)
+    thumbnail: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a plain dict with deterministic ordering."""
+        """Serialize to a plain dict with deterministic ordering.
+
+        v2-only fields (``comfylock_version``, ``provenance``, ``thumbnail`` and
+        the v2 model metadata) are emitted only when ``version >= 2``, so a lock
+        written with ``--lock-version 1`` is byte-compatible with a v1 reader.
+        """
+        v2 = self.version >= 2
         d: dict[str, Any] = {"version": self.version}
         if self.workflow:
             d["workflow"] = self.workflow
         if self.generated:
             d["generated"] = self.generated
+        if v2 and self.comfylock_version:
+            d["comfylock_version"] = self.comfylock_version
+        if v2 and self.provenance:
+            d["provenance"] = self.provenance
         if self.comfyui:
             d["comfyui"] = self.comfyui
         custom: dict[str, Any] = {}
@@ -164,10 +219,12 @@ class Lockfile:
             d["custom_nodes"] = custom
         if self.models:
             d["models"] = [
-                m.to_dict() for m in sorted(self.models, key=lambda m: m.name.lower())
+                m.to_dict(v2=v2) for m in sorted(self.models, key=lambda m: m.name.lower())
             ]
         if self.parameters:
             d["parameters"] = {k: self.parameters[k] for k in sorted(self.parameters)}
+        if v2 and self.thumbnail:
+            d["thumbnail"] = self.thumbnail
         return d
 
     @staticmethod
@@ -196,6 +253,10 @@ class Lockfile:
         raw_params = d.get("parameters", {}) or {}
         parameters = dict(raw_params) if isinstance(raw_params, dict) else {}
         version = _as_int(d.get("version", SCHEMA_VERSION), SCHEMA_VERSION)
+        raw_prov = d.get("provenance", {}) or {}
+        provenance = dict(raw_prov) if isinstance(raw_prov, dict) else {}
+        clv = d.get("comfylock_version")
+        thumb = d.get("thumbnail")
         return Lockfile(
             version=version if version is not None else SCHEMA_VERSION,
             workflow=d.get("workflow"),
@@ -205,4 +266,7 @@ class Lockfile:
             file_nodes=file_nodes,
             models=models,
             parameters=parameters,
+            comfylock_version=str(clv) if isinstance(clv, str) and clv else None,
+            provenance=provenance,
+            thumbnail=str(thumb) if isinstance(thumb, str) and thumb else None,
         )

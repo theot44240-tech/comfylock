@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import os
+import platform
+import socket
 from pathlib import Path
 from typing import Any
 
-from . import serialize
+from . import __version__, serialize
 from .hashes import COMPUTABLE, HashCache
-from .model import HASH_TYPES, Hash, Lockfile, Model
+from .model import HASH_TYPES, SCHEMA_VERSION, Hash, Lockfile, Model
 from .scan import (
     locate_models,
     relpath,
@@ -17,6 +20,31 @@ from .scan import (
     scan_custom_nodes,
 )
 from .workflow import extract_models, extract_params
+
+
+class StrictError(RuntimeError):
+    """Raised by ``pack --strict`` when a referenced model is missing on disk."""
+
+
+def _provenance() -> dict[str, Any]:
+    """Best-effort author/machine metadata for a v2 lock (opt-in).
+
+    The hostname is stored as a SHA256 digest by default so the lock can be
+    shared without leaking the machine name. Off by default because it makes
+    a pack non-reproducible across machines.
+    """
+    host = socket.gethostname() or ""
+    prov: dict[str, Any] = {
+        "hostname": hashlib.sha256(host.encode("utf-8")).hexdigest()[:16] if host else None,
+        "os": platform.system().lower() or None,
+        "python": platform.python_version(),
+    }
+    author = os.environ.get("COMFYLOCK_AUTHOR") or os.environ.get("USER") or os.environ.get(
+        "USERNAME"
+    )
+    if author:
+        prov["author"] = author
+    return {k: v for k, v in prov.items() if v is not None}
 
 
 def _now_iso() -> str:
@@ -77,8 +105,17 @@ def build_lock(
     comfyui_root: str | Path | None,
     hash_types: list[str] | None = None,
     cache: HashCache | None = None,
+    lock_version: int = SCHEMA_VERSION,
+    strict: bool = False,
+    provenance: bool = False,
 ) -> Lockfile:
-    """Construct a Lockfile in memory. Pure-ish: only reads the filesystem."""
+    """Construct a Lockfile in memory. Pure-ish: only reads the filesystem.
+
+    ``lock_version`` selects the on-disk schema (2 by default; pass 1 for a
+    v1-compatible lock). ``strict`` raises :class:`StrictError` if any model the
+    workflow references is absent on disk. ``provenance`` records opt-in
+    author/machine metadata (v2 only).
+    """
     hash_types = _resolve_hash_types(hash_types)
     cache = cache or HashCache()
 
@@ -89,7 +126,12 @@ def build_lock(
         workflow=workflow_name,
         generated=_now_iso(),
         parameters=params,
+        version=lock_version,
     )
+    if lock_version >= 2:
+        lock.comfylock_version = __version__
+        if provenance:
+            lock.provenance = _provenance()
 
     found: dict[str, Path] = {}
     if comfyui_root is not None:
@@ -97,6 +139,7 @@ def build_lock(
         lock.git_nodes, lock.file_nodes = scan_custom_nodes(comfyui_root)
         found = locate_models(comfyui_root, model_names).found
 
+    missing: list[str] = []
     for name in model_names:
         m = Model(name=name)
         path = found.get(name)
@@ -108,9 +151,15 @@ def build_lock(
                 m.hashes.append(Hash(type=ht, hash=cache.get(path, ht)))
         else:
             m.present = False
+            missing.append(name)
         lock.models.append(m)
 
     cache.save()
+    if strict and missing:
+        raise StrictError(
+            f"{len(missing)} model(s) referenced by the workflow are missing on disk: "
+            + ", ".join(sorted(missing))
+        )
     return lock
 
 
@@ -120,6 +169,9 @@ def pack(
     comfyui_root: str | Path | None = None,
     hash_types: list[str] | None = None,
     cache_path: str | Path | None = None,
+    lock_version: int = SCHEMA_VERSION,
+    strict: bool = False,
+    provenance: bool = False,
 ) -> Path:
     """Read a workflow file, build the lock, and write it. Returns the path."""
     workflow_path = Path(workflow_path)
@@ -133,5 +185,8 @@ def pack(
         comfyui_root=comfyui_root,
         hash_types=hash_types,
         cache=cache,
+        lock_version=lock_version,
+        strict=strict,
+        provenance=provenance,
     )
     return serialize.write(lock, out_path)

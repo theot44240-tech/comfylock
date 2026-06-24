@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a problem with ComfyLock
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please include a minimal `.lock` file or
+        `.flow.json` that reproduces the issue so we can debug it quickly.
+  - type: input
+    id: version
+    attributes:
+      label: ComfyLock version
+      description: Output of `comfy-lock --version`.
+      placeholder: "comfylock 0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version & OS
+      placeholder: "Python 3.11 on Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Run `comfy-lock ...`
+        2. ...
+  - type: textarea
+    id: lock
+    attributes:
+      label: Minimal .lock or workflow (if applicable)
+      render: json
