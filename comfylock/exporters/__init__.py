@@ -12,8 +12,17 @@ from .dockerfile import to_dockerfile
 from .json_schema import to_json_schema
 from .manager_snapshot import to_manager_snapshot
 from .markdown import to_markdown
+from .requirements import to_requirements
+from .shell import to_shell
 
-FORMATS = ("markdown", "manager-snapshot", "dockerfile", "json-schema")
+FORMATS = (
+    "markdown",
+    "manager-snapshot",
+    "dockerfile",
+    "json-schema",
+    "shell",
+    "requirements",
+)
 
 
 def export(lock: Lockfile, fmt: str) -> str:
@@ -25,6 +34,10 @@ def export(lock: Lockfile, fmt: str) -> str:
         return to_dockerfile(lock)
     if fmt == "json-schema":
         return to_json_schema()
+    if fmt == "shell":
+        return to_shell(lock)
+    if fmt == "requirements":
+        return to_requirements(lock)
     raise RuntimeError(f"Unknown export format {fmt!r}. Valid: {', '.join(FORMATS)}.")
 
 
@@ -35,4 +48,6 @@ __all__ = [
     "to_manager_snapshot",
     "to_dockerfile",
     "to_json_schema",
+    "to_shell",
+    "to_requirements",
 ]

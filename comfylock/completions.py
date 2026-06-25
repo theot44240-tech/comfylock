@@ -16,12 +16,16 @@ COMMANDS = (
     "inspect",
     "export",
     "manager-import",
+    "import",
     "merge",
     "gc",
     "update",
     "sign",
     "init",
     "completions",
+    "audit",
+    "hash",
+    "doctor",
     "selftest",
 )
 

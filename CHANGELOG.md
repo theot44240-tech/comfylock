@@ -5,6 +5,43 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-24
+
+### Added
+
+- `comfy-lock audit <lock>` — scan pinned GitHub custom nodes for published
+  security advisories via the public GitHub Security Advisories REST API (no
+  token required). Reports severity, GHSA/CVE id, and a link per advisory.
+  `--fail-on-advisory` gates CI (exit 1), `--json` emits a machine-readable
+  result, and advisories are cached for one hour in `.comfylock-audit-cache.json`.
+  Non-GitHub nodes are skipped and transient network/rate-limit failures degrade
+  to a warning rather than failing the scan.
+- `comfy-lock hash <file> [--type TYPE]... [--json]` — hash any file on demand in
+  the same format `.lock` files use (repeatable `--type`, default SHA256), for
+  manually verifying a model. Reuses the existing hashing internals.
+- `comfy-lock doctor [-r ROOT] [<lock>]` — diagnose a ComfyUI install and/or a
+  lockfile: entrypoint/`models/`/`custom_nodes/` presence, standard model
+  subdirectories, `git` on `PATH`, nearby `.lock` files, lock schema/URL sanity,
+  and hash-cache validity — each check with an actionable suggestion. `--json`
+  supported; exit 1 when any hard check fails.
+- `comfy-lock import <snapshot.json>` — a short alias for `manager-import` (build
+  a lock from a ComfyUI-Manager snapshot).
+- `export --format shell` — a standalone, dependency-free `install.sh` that
+  clones each pinned node at its commit and downloads each model (curl with a
+  wget fallback), verifying SHA256 via `sha256sum`.
+- `export --format requirements` — a `requirements-comfy.txt` listing each git
+  node as `git+https://…@<commit>` (informational; documents the node set).
+- `--json` output on `verify` and `diff` (in addition to the new commands),
+  sharing a uniform envelope `{command, version, status, errors, warnings, data}`
+  via the new `comfylock/jsonout.py`; when active, human text goes to stderr so
+  stdout always parses cleanly in a pipeline.
+
+### Changed
+
+- The `completions` scripts now list the new `audit`, `hash`, `doctor`, and
+  `import` subcommands.
+- `pyproject.toml` / `__init__.py` bumped to `0.4.0`.
+
 ## [0.3.0] - 2026-06-24
 
 ### Added
@@ -229,6 +266,7 @@ Initial release.
 - Apache-2.0 license, CI on Linux/macOS/Windows for Python 3.8/3.11/3.12, and a
   tag-driven release workflow.
 
+[0.4.0]: https://github.com/theot44240-tech/comfylock/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/theot44240-tech/comfylock/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/theot44240-tech/comfylock/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/theot44240-tech/comfylock/releases/tag/v0.1.0
