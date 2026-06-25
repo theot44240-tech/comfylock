@@ -56,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   break a value out of its line into a fresh (attacker-chosen) instruction.
   Benign URLs/commits/paths are unaffected (the safe charset stays unquoted).
 
+### Fixed
+
+- `unpack --jobs N` (parallel downloads) no longer intermittently reports a
+  valid model as `unsafe path`. Workers created the shared destination directory
+  (e.g. `models/loras`) lazily, so one worker's `mkdir` raced another worker's
+  containment check; on Windows, resolving a path whose ancestor is mid-creation
+  intermittently raised and `is_within` then rejected the path. The destination
+  directories are now materialised up front, before the thread pool starts, so
+  every worker sees only stable ancestors (fixes a flaky CI failure on
+  `windows-latest`).
+
 ## [0.3.0] - 2026-06-24
 
 ### Added

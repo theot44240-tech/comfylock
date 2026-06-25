@@ -193,6 +193,19 @@ def unpack(
             if jobs > 1 and len(planned) > 1:
                 # Each download writes its own confined path and verifies its own
                 # hash, so they are independent; run up to ``jobs`` at a time.
+                #
+                # Materialise every destination's parent directory first, in this
+                # thread. If the workers created shared ancestors (e.g. the common
+                # ``models/loras``) lazily, one worker's ``mkdir`` would race
+                # another worker's ``is_within`` check: on Windows, resolving a
+                # path whose ancestor is mid-creation intermittently raises and
+                # the containment guard then rejects a perfectly valid model as
+                # "unsafe path" (a flaky, environment-dependent failure). With the
+                # tree built up front the workers only ever see stable ancestors.
+                for pm in planned:
+                    pdest = root / (pm[0].paths[0] if pm[0].paths else _default_dest(pm[0]))
+                    if _within(root, pdest):
+                        pdest.parent.mkdir(parents=True, exist_ok=True)
                 with ThreadPoolExecutor(max_workers=jobs) as ex:
                     list(ex.map(lambda pm: _do_download(root, pm[0], pm[1]), planned))
             else:
