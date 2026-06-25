@@ -222,6 +222,95 @@ class ExportShellRequirementsTests(unittest.TestCase):
         self.assertIn("no git-backed custom nodes", export(Lockfile(), "requirements"))
 
 
+class ExportInjectionTests(unittest.TestCase):
+    """A ``.lock`` is untrusted, shared input and the shell/dockerfile exports are
+    *executed* (``bash install.sh`` / ``docker build``). Lock-controlled fields
+    (commits, URLs, paths, hashes, workflow name) must never inject commands.
+    """
+
+    def test_shell_quotes_command_separator_injection(self):
+        # comfyui core commit + node commit carrying a `;` command separator.
+        lock = Lockfile(
+            comfyui="aaaa; touch PWNED #",
+            git_nodes={"https://github.com/a/b.git": "bbbb && touch PWNED"},
+        )
+        sh = export(lock, "shell")
+        # The payloads survive only inside single quotes; the bare (executable)
+        # forms must be absent.
+        self.assertIn("git checkout 'aaaa; touch PWNED #'", sh)
+        self.assertNotIn("git checkout aaaa; touch", sh)
+        self.assertIn("git checkout 'bbbb && touch PWNED'", sh)
+        self.assertNotIn("&& touch PWNED )", sh)
+
+    def test_shell_blocks_substitution_and_quote_breakout_in_model_fields(self):
+        import shlex as _shlex
+        url = '"; rm -rf ~ ; echo "'             # double-quote breakout attempt
+        dest = "models/x/$(touch PWNED).bin"     # command substitution attempt
+        lock = Lockfile(models=[Model(
+            "m.safetensors", url=url, paths=[dest],
+            hashes=[Hash("SHA256", "f" * 64)],
+        )])
+        sh = export(lock, "shell")
+        # Both fields appear only as a single shlex-quoted word; bash performs no
+        # substitution inside single quotes and the `"` cannot break out.
+        self.assertIn(f"dl {_shlex.quote(url)} {_shlex.quote(dest)}", sh)
+        self.assertNotIn('dl "', sh)             # no double-quoted (injectable) args
+        # Every generated line is well-formed shell (balanced quoting).
+        for line in sh.splitlines():
+            try:
+                _shlex.split(line)
+            except ValueError:
+                self.fail(f"generated shell line does not parse: {line!r}")
+
+    def test_dockerfile_blocks_newline_instruction_breakout(self):
+        # A newline is the Dockerfile-specific vector: it ends the current line
+        # and the next physical line is parsed as a fresh instruction.
+        lock = Lockfile(
+            workflow='wf"\nRUN touch PWNED\n#',
+            comfyui="cccc\nRUN touch PWNED",
+            git_nodes={"https://github.com/a/b.git": "dddd\nRUN touch PWNED"},
+        )
+        df = export(lock, "dockerfile")
+        for line in df.splitlines():
+            self.assertNotEqual(
+                line.strip(), "RUN touch PWNED",
+                "lock data broke out into a standalone RUN instruction",
+            )
+        # The workflow LABEL stays on exactly one physical line.
+        labels = [ln for ln in df.splitlines()
+                  if ln.startswith("LABEL comfylock.workflow")]
+        self.assertEqual(len(labels), 1)
+
+    def test_dockerfile_quotes_uncommentable_model_lines(self):
+        # The template tells users to uncomment the model RUN lines, so they must
+        # be shell-safe too even though they ship commented.
+        import shlex as _shlex
+        url = "$(touch PWNED)"
+        dest = "models/x/m.safetensors"
+        lock = Lockfile(models=[Model(
+            "m.safetensors", url=url, paths=[dest],
+            hashes=[Hash("SHA256", "f" * 64)],
+        )])
+        df = export(lock, "dockerfile")
+        self.assertIn(f"wget -O {_shlex.quote(dest)} {_shlex.quote(url)}", df)
+        self.assertNotIn(f"wget -O {dest} {url}", df)   # unquoted form absent
+
+    def test_benign_values_stay_readable(self):
+        # Quoting must not garble ordinary URLs/commits/paths (shlex leaves the
+        # safe charset unquoted), so the common-case output is unchanged.
+        lock = Lockfile(
+            comfyui="d" * 40,
+            git_nodes={"https://github.com/a/b.git": "e" * 40},
+            models=[Model("m.safetensors", url="https://h/m.safetensors",
+                          paths=["models/checkpoints/m.safetensors"],
+                          hashes=[Hash("SHA256", "f" * 64)])],
+        )
+        sh = export(lock, "shell")
+        self.assertIn("git checkout " + "d" * 40, sh)        # no quotes added
+        self.assertIn("git clone https://github.com/a/b.git", sh)
+        self.assertIn("dl https://h/m.safetensors models/checkpoints/m.safetensors", sh)
+
+
 class ImportAliasTests(unittest.TestCase):
     def test_import_alias(self):
         snap = {

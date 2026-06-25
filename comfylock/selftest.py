@@ -569,6 +569,22 @@ def run_selftest() -> int:
             "git_custom_nodes" in export(Lockfile(comfyui="abc123"), "manager-snapshot"),
             "export --format manager-snapshot includes git_custom_nodes",
         )
+        # A lock is untrusted input and the shell/dockerfile exports are executed:
+        # a `;`-injected commit must stay shell-quoted, never a bare command.
+        inj_sh = export(Lockfile(comfyui="aaaa; touch PWNED #"), "shell")
+        c.check(
+            "git checkout 'aaaa; touch PWNED #'" in inj_sh
+            and "git checkout aaaa; touch" not in inj_sh,
+            "export --format shell quotes injected lock values",
+        )
+        inj_df = export(
+            Lockfile(git_nodes={"https://github.com/a/b.git": "d\nRUN touch PWNED"}),
+            "dockerfile",
+        )
+        c.check(
+            not any(ln.strip() == "RUN touch PWNED" for ln in inj_df.splitlines()),
+            "export --format dockerfile blocks newline instruction breakout",
+        )
 
         # --- doctor: a clean fake install passes; a missing root errors ---
         droot = Path(td) / "comfy_install"

