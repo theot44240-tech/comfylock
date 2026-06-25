@@ -1,7 +1,7 @@
 """Command-line interface for ComfyLock.
 
-``comfy-lock <pack|verify|unpack|diff|inspect|export|manager-import|merge|gc|
-update|sign|init|completions|selftest> ...``
+``comfy-lock <pack|verify|unpack|diff|inspect|export|manager-import|import|merge|
+gc|update|sign|init|completions|audit|hash|doctor|selftest> ...``
 """
 
 from __future__ import annotations
@@ -76,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--check-sig", action="store_true",
         help="Verify a detached GPG signature (<lock>.asc) before anything else.",
     )
+    p_verify.add_argument(
+        "--json", action="store_true",
+        help="Emit a machine-readable JSON result (human text goes to stderr).",
+    )
     _add_common(p_verify)
 
     # --- unpack ---
@@ -97,6 +101,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--exit-code", action="store_true",
         help="Exit 1 when the lockfiles differ (for CI gating, like `git diff`).",
     )
+    p_diff.add_argument(
+        "--json", action="store_true",
+        help="Emit a machine-readable JSON result instead of text.",
+    )
 
     # --- inspect ---
     p_inspect = sub.add_parser("inspect", help="Human-readable summary of a lockfile.")
@@ -112,11 +120,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_export.add_argument("--format", required=True, choices=FORMATS, help="Export target.")
     p_export.add_argument("-o", "--out", default=None, help="Write to a file instead of stdout.")
 
-    # --- manager-import ---
-    p_mi = sub.add_parser("manager-import", help="Build a lock from a ComfyUI-Manager snapshot.")
-    p_mi.add_argument("snapshot", help="Path to the ComfyUI-Manager snapshot.json.")
-    p_mi.add_argument("-o", "--out", default=None, help="Output lock path (default: <snapshot>.lock).")
-    _add_common(p_mi)
+    # --- manager-import (also exposed as the shorter alias `import`) ---
+    for _name, _help in (
+        ("manager-import", "Build a lock from a ComfyUI-Manager snapshot."),
+        ("import", "Alias of manager-import: build a lock from a Manager snapshot."),
+    ):
+        p_mi = sub.add_parser(_name, help=_help)
+        p_mi.add_argument("snapshot", help="Path to the ComfyUI-Manager snapshot.json.")
+        p_mi.add_argument(
+            "-o", "--out", default=None,
+            help="Output lock path (default: <snapshot>.lock).",
+        )
+        _add_common(p_mi)
 
     # --- merge ---
     p_merge = sub.add_parser("merge", help="Merge several locks into one environment lock.")
@@ -159,6 +174,48 @@ def build_parser() -> argparse.ArgumentParser:
     p_comp = sub.add_parser("completions", help="Emit a shell completion script.")
     p_comp.add_argument("--shell", required=True, choices=SHELLS, help="Target shell.")
 
+    # --- audit ---
+    p_audit = sub.add_parser(
+        "audit", help="Scan pinned GitHub nodes for published security advisories."
+    )
+    p_audit.add_argument("lock", help="Path to the lockfile.")
+    p_audit.add_argument(
+        "--fail-on-advisory", action="store_true",
+        help="Exit 1 if any advisory is found (for CI gating).",
+    )
+    p_audit.add_argument(
+        "--no-cache", action="store_true",
+        help="Bypass the 1-hour advisory cache and always query the API.",
+    )
+    p_audit.add_argument(
+        "--json", action="store_true", help="Emit a machine-readable JSON result."
+    )
+
+    # --- hash ---
+    from .model import HASH_TYPES
+
+    p_hash = sub.add_parser(
+        "hash", help="Hash a file in ComfyLock-compatible format."
+    )
+    p_hash.add_argument("file", help="File to hash.")
+    p_hash.add_argument(
+        "--type", action="append", default=None, choices=HASH_TYPES, metavar="TYPE",
+        help=f"Hash type(s). Repeatable (default: SHA256). One of: {', '.join(HASH_TYPES)}.",
+    )
+    p_hash.add_argument(
+        "--json", action="store_true", help="Emit [{\"type\":..,\"hash\":..}] JSON."
+    )
+
+    # --- doctor ---
+    p_doc = sub.add_parser(
+        "doctor", help="Diagnose a ComfyUI install and/or a lockfile."
+    )
+    p_doc.add_argument("lock", nargs="?", default=None, help="Optional lockfile to inspect.")
+    p_doc.add_argument(
+        "--json", action="store_true", help="Emit a machine-readable JSON result."
+    )
+    _add_common(p_doc)
+
     sub.add_parser("selftest", help="Run the built-in self-test suite.")
 
     return parser
@@ -188,14 +245,23 @@ def cmd_pack(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    sig_note: str | None = None
     if args.check_sig:
         from .sign import verify_signature
 
         ok, msg = verify_signature(args.lock)
         if not ok:
-            print(f"error: signature check failed: {msg}", file=sys.stderr)
+            if args.json:
+                from .jsonout import ERROR, Result
+
+                print(Result("verify", ERROR, {"passed": False},
+                             errors=[f"signature check failed: {msg}"]).dumps())
+            else:
+                print(f"error: signature check failed: {msg}", file=sys.stderr)
             return 2
-        print(f"signature: {msg}")
+        sig_note = msg
+        if not args.json:
+            print(f"signature: {msg}")
     lock = serialize.read(args.lock)
     report = do_verify(
         lock,
@@ -203,11 +269,34 @@ def cmd_verify(args: argparse.Namespace) -> int:
         check_hashes=not args.no_hash,
         cache=_cache(args.no_cache, args.comfyui_root),
     )
-    print(report.render())
+    strict_fail = bool(args.strict and report.n_warnings)
+    if args.json:
+        from . import report as _rep
+        from .jsonout import Result, status_for
+
+        errors = [i.message for i in report.issues if i.severity == _rep.ERROR]
+        warnings = [i.message for i in report.issues if i.severity == _rep.WARN]
+        data = {
+            "passed": report.passed and not strict_fail,
+            "n_errors": report.n_errors,
+            "n_warnings": report.n_warnings,
+            "checks": [
+                {"severity": i.severity, "message": i.message} for i in report.issues
+            ],
+        }
+        if sig_note:
+            data["signature"] = sig_note
+        print(Result("verify", status_for(errors, warnings), data, errors, warnings).dumps())
+    else:
+        print(report.render())
     if not report.passed:
         return 1
-    if args.strict and report.n_warnings:
-        print(f"\nstrict: {report.n_warnings} warning(s) treated as failure.", file=sys.stderr)
+    if strict_fail:
+        if not args.json:
+            print(
+                f"\nstrict: {report.n_warnings} warning(s) treated as failure.",
+                file=sys.stderr,
+            )
         return 1
     return 0
 
@@ -234,7 +323,13 @@ def cmd_diff(args: argparse.Namespace) -> int:
     old = serialize.read(args.old)
     new = serialize.read(args.new)
     d = diff_locks(old, new)
-    print(d.render())
+    if args.json:
+        from .jsonout import OK, Result
+
+        data = {"empty": d.empty, "n_changes": len(d.changes), "changes": list(d.changes)}
+        print(Result("diff", OK, data).dumps())
+    else:
+        print(d.render())
     return 1 if (args.exit_code and not d.empty) else 0
 
 
@@ -357,6 +452,68 @@ def cmd_completions(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    from .audit import audit_lock
+
+    lock = serialize.read(args.lock)
+    cache_path = None if args.no_cache else (Path(".") / ".comfylock-audit-cache.json")
+    result = audit_lock(lock, cache_path=cache_path)
+    failing = args.fail_on_advisory and result.has_advisories
+    if args.json:
+        from .jsonout import ERROR, OK, WARNING, Result
+
+        errors = [f"{result.advisory_count} advisory(ies) found"] if failing else []
+        if errors:
+            status = ERROR
+        elif result.has_advisories or result.warnings:
+            status = WARNING
+        else:
+            status = OK
+        print(Result("audit", status, result.to_dict(), errors, list(result.warnings)).dumps())
+    else:
+        print(result.render())
+    return 1 if failing else 0
+
+
+def cmd_hash(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .hashes import compute
+
+    types = args.type or ["SHA256"]
+    results = [{"type": t, "hash": compute(args.file, t)} for t in types]
+    if args.json:
+        print(_json.dumps(results, indent=2))
+    else:
+        for r in results:
+            print(f"{r['type']}  {r['hash']}")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from .doctor import doctor
+
+    rep = doctor(comfyui_root=args.comfyui_root, lock_path=args.lock)
+    if args.json:
+        from . import report as _rep
+        from .jsonout import Result, status_for
+
+        errors = [i.message for i in rep.issues if i.severity == _rep.ERROR]
+        warnings = [i.message for i in rep.issues if i.severity == _rep.WARN]
+        data = {
+            "passed": rep.passed,
+            "n_errors": rep.n_errors,
+            "n_warnings": rep.n_warnings,
+            "checks": [
+                {"severity": i.severity, "message": i.message} for i in rep.issues
+            ],
+        }
+        print(Result("doctor", status_for(errors, warnings), data, errors, warnings).dumps())
+    else:
+        print(rep.render())
+    return 1 if rep.n_errors else 0
+
+
 def cmd_selftest(_args: argparse.Namespace) -> int:
     from .selftest import run_selftest
 
@@ -391,12 +548,16 @@ def main(argv: list[str] | None = None) -> int:
         "inspect": cmd_inspect,
         "export": cmd_export,
         "manager-import": cmd_manager_import,
+        "import": cmd_manager_import,
         "merge": cmd_merge,
         "gc": cmd_gc,
         "update": cmd_update,
         "sign": cmd_sign,
         "init": cmd_init,
         "completions": cmd_completions,
+        "audit": cmd_audit,
+        "hash": cmd_hash,
+        "doctor": cmd_doctor,
         "selftest": cmd_selftest,
     }
     try:

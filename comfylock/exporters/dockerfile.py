@@ -7,8 +7,36 @@ exact URL and a hash-verify command are shown for each so a user can opt in.
 
 from __future__ import annotations
 
+import shlex
+
 from .. import __version__
 from ..model import Lockfile
+
+
+def _oneline(value: object) -> str:
+    """Collapse CR/LF so an untrusted lock value cannot break out of its
+    Dockerfile line: a raw newline ends the current RUN/LABEL/comment and the
+    Dockerfile parser reads the next line as a fresh (attacker-chosen)
+    instruction -- even inside a ``#`` comment."""
+    return str(value).replace("\r", " ").replace("\n", " ")
+
+
+def _arg(value: object) -> str:
+    """Shell-quote an untrusted lock value for use inside a ``RUN`` command.
+
+    A lockfile is shared, third-party input whose URLs/commits/paths are read
+    verbatim (see ``model.from_dict``). RUN bodies run via ``/bin/sh -c``, so the
+    value must be quoted to stop ``;`` / ``$(...)`` / backtick injection, and
+    newlines must be collapsed first (the Dockerfile parser splits on physical
+    newlines before the shell ever runs). Applies to the live core/node clones
+    *and* the commented model lines, which the template tells users to uncomment.
+    """
+    return shlex.quote(_oneline(value))
+
+
+def _label(value: object) -> str:
+    """One-line, double-quote-safe ``LABEL`` value (escape ``\\`` and ``\"``)."""
+    return _oneline(value).replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _node_name(url: str) -> str:
@@ -23,14 +51,14 @@ def to_dockerfile(lock: Lockfile) -> str:
     out.append("FROM comfyanonymous/comfyui:latest")
     out.append(f'LABEL comfylock.version="{__version__}"')
     if lock.workflow:
-        out.append(f'LABEL comfylock.workflow="{lock.workflow}"')
+        out.append(f'LABEL comfylock.workflow="{_label(lock.workflow)}"')
     out.append("")
     out.append("WORKDIR /ComfyUI")
     out.append("")
 
     if lock.comfyui:
         out.append("# Pin ComfyUI core to the locked commit")
-        out.append(f"RUN git fetch --all && git checkout {lock.comfyui}")
+        out.append(f"RUN git fetch --all && git checkout {_arg(lock.comfyui)}")
         out.append("")
 
     if lock.git_nodes:
@@ -39,8 +67,8 @@ def to_dockerfile(lock: Lockfile) -> str:
         for url, commit in sorted(lock.git_nodes.items()):
             name = _node_name(url)
             out.append(
-                f"RUN git clone {url} {name} && "
-                f"cd {name} && git checkout {commit}"
+                f"RUN git clone {_arg(url)} {_arg(name)} && "
+                f"cd {_arg(name)} && git checkout {_arg(commit)}"
             )
         out.append("WORKDIR /ComfyUI")
         out.append("")
@@ -52,12 +80,15 @@ def to_dockerfile(lock: Lockfile) -> str:
             dest = m.paths[0] if m.paths else f"models/checkpoints/{m.name}"
             sha = m.hash_of("SHA256")
             if not m.url:
-                out.append(f"# (no download URL for {m.name})")
+                out.append(f"# (no download URL for {_oneline(m.name)})")
                 continue
-            out.append(f"# {m.name} ({m.type or 'model'})")
-            out.append(f"# RUN mkdir -p $(dirname {dest}) && wget -O {dest} '{m.url}'")
+            out.append(f"# {_oneline(m.name)} ({_oneline(m.type or 'model')})")
+            out.append(
+                f"# RUN mkdir -p $(dirname {_arg(dest)}) && "
+                f"wget -O {_arg(dest)} {_arg(m.url)}"
+            )
             if sha:
-                out.append(f"# RUN echo '{sha}  {dest}' | sha256sum -c -")
+                out.append(f"# RUN echo {_arg(f'{sha}  {dest}')} | sha256sum -c -")
         out.append("")
 
     out.append('CMD ["python", "main.py", "--listen", "0.0.0.0"]')

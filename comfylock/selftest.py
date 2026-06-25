@@ -490,6 +490,126 @@ def run_selftest() -> int:
             "fetcher falls back from a bad URL to a working mirror",
         )
 
+        # ----------------------------------------------------------------- #
+        # v0.4.0 features
+        # ----------------------------------------------------------------- #
+        import hashlib as _hl
+
+        from .audit import audit_lock, parse_github_repo
+        from .doctor import doctor as run_doctor
+        from .jsonout import Result, status_for
+
+        # --- audit: GitHub owner/repo parsing, non-GitHub skipped ---
+        c.check(
+            parse_github_repo("https://github.com/o/r.git") == ("o", "r")
+            and parse_github_repo("git@github.com:o/r.git") == ("o", "r")
+            and parse_github_repo("https://gitlab.com/o/r.git") is None,
+            "audit parses GitHub owner/repo and skips non-GitHub hosts",
+        )
+
+        # --- audit: injected fetch reports advisories; empty list = none ---
+        alock = Lockfile(git_nodes={
+            "https://github.com/acme/vuln.git": "a" * 40,
+            "https://github.com/acme/clean.git": "b" * 40,
+        })
+
+        def _fake_fetch(owner: str, repo: str) -> list:
+            if repo == "vuln":
+                return [{"ghsa_id": "GHSA-1", "severity": "high",
+                         "summary": "x", "cve_id": "CVE-1", "html_url": "http://x"}]
+            return []
+
+        ares = audit_lock(alock, fetch=_fake_fetch)
+        c.check(
+            ares.has_advisories and ares.advisory_count == 1,
+            "audit reports an advisory from the fetcher",
+        )
+        c.check(
+            any(n.repo == "clean" and not n.advisories and not n.error for n in ares.nodes),
+            "audit handles an empty advisory list correctly",
+        )
+
+        # --- audit: a fetch error degrades to a warning, not a crash ---
+        def _boom(owner: str, repo: str) -> list:
+            raise RuntimeError("network down")
+
+        bres = audit_lock(
+            Lockfile(git_nodes={"https://github.com/a/b.git": "c" * 40}), fetch=_boom
+        )
+        c.check(
+            len(bres.warnings) == 1 and not bres.has_advisories,
+            "audit degrades a fetch error to a warning",
+        )
+
+        # --- hash command parity with stdlib ---
+        hf = Path(td) / "hashme.bin"
+        hf.write_bytes(b"comfylock-hash-check" * 7)
+        c.check(
+            compute(hf, "SHA256") == _hl.sha256(hf.read_bytes()).hexdigest(),
+            "hash command matches stdlib sha256",
+        )
+
+        # --- export: shell verifies each model; requirements pins git+ ---
+        shlock = Lockfile(models=[Model(
+            "m.safetensors", url="https://h/m",
+            paths=["models/checkpoints/m.safetensors"],
+            hashes=[Hash("SHA256", "a" * 64)],
+        )])
+        sh = export(shlock, "shell")
+        c.check(
+            "sha256sum" in sh and sh.startswith("#!/usr/bin/env bash"),
+            "export --format shell verifies each model with sha256sum",
+        )
+        reqlock = Lockfile(git_nodes={"https://github.com/a/b.git": "d" * 40})
+        c.check(
+            ("git+https://github.com/a/b@" + "d" * 40) in export(reqlock, "requirements"),
+            "export --format requirements emits a git+ pin",
+        )
+        c.check(
+            "git_custom_nodes" in export(Lockfile(comfyui="abc123"), "manager-snapshot"),
+            "export --format manager-snapshot includes git_custom_nodes",
+        )
+        # A lock is untrusted input and the shell/dockerfile exports are executed:
+        # a `;`-injected commit must stay shell-quoted, never a bare command.
+        inj_sh = export(Lockfile(comfyui="aaaa; touch PWNED #"), "shell")
+        c.check(
+            "git checkout 'aaaa; touch PWNED #'" in inj_sh
+            and "git checkout aaaa; touch" not in inj_sh,
+            "export --format shell quotes injected lock values",
+        )
+        inj_df = export(
+            Lockfile(git_nodes={"https://github.com/a/b.git": "d\nRUN touch PWNED"}),
+            "dockerfile",
+        )
+        c.check(
+            not any(ln.strip() == "RUN touch PWNED" for ln in inj_df.splitlines()),
+            "export --format dockerfile blocks newline instruction breakout",
+        )
+
+        # --- doctor: a clean fake install passes; a missing root errors ---
+        droot = Path(td) / "comfy_install"
+        (droot / "models" / "checkpoints").mkdir(parents=True)
+        (droot / "custom_nodes").mkdir(parents=True)
+        (droot / "main.py").write_text("# comfy\n", encoding="utf-8")
+        c.check(run_doctor(str(droot)).n_errors == 0, "doctor passes a valid install")
+        c.check(
+            run_doctor(str(Path(td) / "nope")).n_errors >= 1,
+            "doctor errors on a missing root",
+        )
+
+        # --- json envelope: status + required fields ---
+        c.check(
+            status_for([], []) == "ok"
+            and status_for([], ["w"]) == "warning"
+            and status_for(["e"], []) == "error",
+            "json envelope status derives from errors/warnings",
+        )
+        env = Result("verify", "ok", {"passed": True}).envelope()
+        c.check(
+            env["command"] == "verify" and env["status"] == "ok" and "version" in env,
+            "json envelope carries command/status/version",
+        )
+
     total = c.passed + c.failed
     print(f"selftest: {c.passed}/{total} checks passed.")
     return 0 if c.failed == 0 else 1

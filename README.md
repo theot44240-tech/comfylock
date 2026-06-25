@@ -55,6 +55,22 @@ portable, verifiable `.lock` file — so the workflow that works on your machine
 
 ---
 
+## 🆕 What's new in v0.4.0
+
+| Feature | Description |
+|---------|-------------|
+| 🔐 `comfy-lock audit` | Scan pinned GitHub nodes for published security advisories (`--fail-on-advisory` gates CI) |
+| 🔑 `comfy-lock hash` | Hash any file in ComfyLock-compatible format (`--type` repeatable, `--json`) |
+| 🩺 `comfy-lock doctor` | Diagnose a ComfyUI install and/or a lockfile, with an actionable fix per check |
+| 📥 `comfy-lock import` | Short alias for `manager-import` (build a lock from a Manager snapshot) |
+| 📤 `export --format shell` | Standalone `install.sh` — clone nodes + download models, `sha256sum`-verified |
+| 📋 `export --format requirements` | `requirements-comfy.txt` of `git+…@<commit>` node pins |
+| 🏗️ `--json` on more commands | `verify` and `diff` join the new commands with a uniform JSON envelope |
+
+Everything stays **pure standard library, zero runtime dependencies.**
+
+---
+
 ## 🧨 The problem
 
 Shared ComfyUI workflows break on someone else's machine all the time. The *same* `.flow.json`
@@ -204,15 +220,25 @@ comfy-lock selftest
 | `unpack` | Dry-run by default; with `--apply`, clone/checkout custom nodes and download missing models (`--jobs N` in parallel), verifying hashes after each download. |
 | `diff` | Semantic comparison of two locks. `--exit-code` returns 1 when they differ, like `git diff --exit-code`. |
 | `inspect` | A rich, human-readable summary of a lock (`--json` to re-emit for `jq`). |
-| `export` | Render a lock as Markdown, a ComfyUI-Manager snapshot, a Dockerfile, or its JSON Schema. |
-| `manager-import` | Build a lock from a ComfyUI-Manager `snapshot.json`. |
+| `export` | Render a lock as Markdown, a ComfyUI-Manager snapshot, a Dockerfile, its JSON Schema, a standalone `install.sh` (`shell`), or a `requirements-comfy.txt` (`requirements`). |
+| `manager-import` / `import` | Build a lock from a ComfyUI-Manager `snapshot.json` (`import` is the short alias). |
 | `merge` | Combine several locks into one environment lock (`first`/`strict` conflict handling). |
 | `gc` | Find (and optionally delete) model files no lock references. |
 | `update` | Refresh pinned commits / hashes / params in place, without a full re-pack. |
+| `audit` | Scan pinned GitHub nodes for published security advisories. `--fail-on-advisory` gates CI; `--json` for machines. |
+| `hash` | Hash any file in ComfyLock-compatible format (`--type` repeatable, default SHA256; `--json`). |
+| `doctor` | Diagnose a ComfyUI install and/or a lockfile; each check carries an actionable suggestion. |
 | `sign` | Write a detached GPG signature `<lock>.asc` for trusted distribution. |
 | `init` | Interactive first-run wizard. |
 | `completions` | Emit a shell completion script. |
 | `selftest` | Run the built-in, offline self-test suite. |
+
+> **JSON output:** `pack`-adjacent commands `verify`, `diff`, `audit`, `hash`, and `doctor`
+> accept `--json` for a uniform, machine-readable envelope
+> (`{command, version, status, errors, warnings, data}`) — human text goes to stderr so
+> stdout always parses cleanly in a pipeline.
+
+Deep-dive guides: [security advisory scanning](docs/audit.md) · [diagnosing issues](docs/doctor.md).
 
 See the [`docs/`](docs/getting-started.md) directory for per-feature guides:
 [CI/CD](docs/ci-cd.md) · [Docker](docs/docker.md) ·
@@ -401,8 +427,8 @@ ComfyLock is small, but it's tested like it isn't.
 
 | Metric | Value |
 | --- | --- |
-| 🧪 Unit tests | **178** (`python -m unittest discover -s tests`) |
-| 🔬 Built-in self-test checks | **54** (`comfy-lock selftest`, fully offline) |
+| 🧪 Unit tests | **200** (`python -m unittest discover -s tests`) |
+| 🔬 Built-in self-test checks | **66** (`comfy-lock selftest`, fully offline) |
 | 🖥️ CI matrix | **Linux · macOS · Windows** × Python **3.9 / 3.10 / 3.11 / 3.12 / 3.13** |
 | 🧹 Static analysis | `ruff` + `mypy` (typed, ships `py.typed`) |
 | 🧱 CI jobs | lint · test matrix · coverage · schema-validate · wheel build+install · docs-links |
@@ -522,8 +548,9 @@ timeline
         v0.1.0 : pack / verify / unpack / diff : multi-hash + size·mtime cache : ComfyUI panel
         v0.2.0 : reproducible packs (SOURCE_DATE_EPOCH) : diff --exit-code for CI : typed model routing
         v0.3.0 : inspect / export / merge / gc / update / sign / init / completions : HuggingFace + Civitai downloads (auth · resume · mirrors) : parallel unpack --jobs : lock schema v2 : ComfyUI panel v2 : pre-commit + JSON Schema + docs
+        v0.4.0 : audit (GitHub advisories) : hash : doctor : import alias : export shell/requirements : --json on verify/diff
     section Next
-        v0.4.0 : comfy-lock doctor (auto-fix drift) : node/model search via registry : lock templates
+        v0.5.0 : node/model search via registry : lock templates : resume interrupted downloads
     section Later
         Distributed lock registry : share locks via URL : VSCode extension
         SBOM generation : webhook on upstream node/model updates
