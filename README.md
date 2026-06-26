@@ -55,19 +55,61 @@ portable, verifiable `.lock` file — so the workflow that works on your machine
 
 ---
 
-## 🆕 What's new in v0.4.0
+## 🆕 What's new in v0.4.1
+
+> [!NOTE]
+> **v0.4.1** adds `sync` (stale-pin detection), an offline security `audit` with
+> **SARIF** output, `docker-compose` export, schema-v2 `workflow_hash` /
+> `environment` / `annotations` / pip requirements, HuggingFace/Civitai
+> enrichment with dead-URL recovery, a `comfylock.toml` project config, and a
+> dependency-free progress bar — still **zero runtime dependencies**.
+> [Full changelog →](CHANGELOG.md)
 
 | Feature | Description |
 |---------|-------------|
-| 🔐 `comfy-lock audit` | Scan pinned GitHub nodes for published security advisories (`--fail-on-advisory` gates CI) |
-| 🔑 `comfy-lock hash` | Hash any file in ComfyLock-compatible format (`--type` repeatable, `--json`) |
-| 🩺 `comfy-lock doctor` | Diagnose a ComfyUI install and/or a lockfile, with an actionable fix per check |
-| 📥 `comfy-lock import` | Short alias for `manager-import` (build a lock from a Manager snapshot) |
-| 📤 `export --format shell` | Standalone `install.sh` — clone nodes + download models, `sha256sum`-verified |
-| 📋 `export --format requirements` | `requirements-comfy.txt` of `git+…@<commit>` node pins |
-| 🏗️ `--json` on more commands | `verify` and `diff` join the new commands with a uniform JSON envelope |
+| 🔄 `comfy-lock sync` | Check pinned node commits against upstream (`git ls-remote`); `--check-only` for CI, `--update-nodes` to re-pin |
+| 🛡️ `audit --format sarif` | Offline checks (http/IP URLs, weak hashes, traversal, size) + SARIF 2.1.0 for GitHub Code Scanning |
+| 🐳 `export --format docker-compose` | `docker-compose.yml` with model/node volume mounts and a commented install block |
+| 🧬 Schema v2 fields | `workflow_hash`, `environment`, `--annotate key=value`, and `custom_nodes.pip` |
+| 🔗 `pack --enrich hf\|civitai` | Store canonical HF/Civitai refs; `unpack` recovers dead URLs from them |
+| ⚙️ `comfylock.toml` | Project defaults (`comfyui_root`, `hash`, `jobs`, …) discovered like `.gitconfig` |
+
+Earlier highlights — v0.4.0: `audit` (GitHub advisories), `hash`, `doctor`,
+`import`, `export shell/requirements`, `--json`. v0.3.0: `inspect` / `export` /
+`merge` / `gc` / `update` / `sign` / `init` / `completions`, schema v2, parallel
+`unpack --jobs`, panel v2.
 
 Everything stays **pure standard library, zero runtime dependencies.**
+
+### ⚙️ Project config — `comfylock.toml`
+
+Drop a `comfylock.toml` at your project root and stop repeating flags. `pack` /
+`verify` / `unpack` discover it from the current directory upward (like `git`
+finds `.gitconfig`); **CLI flags always override the file**.
+
+```toml
+[comfylock]
+comfyui_root = "/home/user/ComfyUI"
+default_hash = ["SHA256", "AutoV2"]
+jobs = 4
+enrich = ["hf"]
+schema_version = 2
+```
+
+`comfy-lock init --non-interactive` writes one for you (and adds the hash cache
+to `.gitignore`).
+
+### 🔁 Keep locks fresh in CI
+
+```yaml
+- name: Fail if any pinned node has drifted upstream
+  run: |
+    pip install "git+https://github.com/theot44240-tech/comfylock.git"
+    comfy-lock sync my_workflow.lock --check-only        # exit 1 when behind
+    comfy-lock audit my_workflow.lock --format sarif > comfylock.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  with: { sarif_file: comfylock.sarif }
+```
 
 ---
 
@@ -549,6 +591,7 @@ timeline
         v0.2.0 : reproducible packs (SOURCE_DATE_EPOCH) : diff --exit-code for CI : typed model routing
         v0.3.0 : inspect / export / merge / gc / update / sign / init / completions : HuggingFace + Civitai downloads (auth · resume · mirrors) : parallel unpack --jobs : lock schema v2 : ComfyUI panel v2 : pre-commit + JSON Schema + docs
         v0.4.0 : audit (GitHub advisories) : hash : doctor : import alias : export shell/requirements : --json on verify/diff
+        v0.4.1 : sync (stale pins) : audit static checks + SARIF : export docker-compose : schema-v2 workflow_hash/environment/annotations/pip : HF+Civitai enrichment + dead-URL recovery : comfylock.toml config : progress bar
     section Next
         v0.5.0 : node/model search via registry : lock templates : resume interrupted downloads
     section Later

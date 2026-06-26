@@ -610,6 +610,148 @@ def run_selftest() -> int:
             "json envelope carries command/status/version",
         )
 
+        # ----------------------------------------------------------------- #
+        # v0.4.1 features
+        # ----------------------------------------------------------------- #
+        from . import audit as _audit
+        from . import config as _config
+        from . import enrich as _enrich
+        from . import sync as _sync
+        from .exporters import export as _export
+        from .pack import parse_annotations, workflow_hash
+        from .progress import ProgressBar
+        from .scan import scan_pip_requirements
+
+        # --- config: discovery + CLI override ---
+        cfgroot = Path(td) / "cfgproj" / "nested"
+        cfgroot.mkdir(parents=True)
+        (Path(td) / "cfgproj" / "comfylock.toml").write_text(
+            '[comfylock]\ncomfyui_root = "/x/ComfyUI"\nhash = ["SHA256"]\njobs = 4\n',
+            encoding="utf-8",
+        )
+        found_cfg = _config.find_config(cfgroot)
+        c.check(found_cfg is not None, "config discovered in an ancestor directory")
+        cfg = _config.read_config_file(found_cfg)
+        c.check(cfg.get("comfyui_root") == "/x/ComfyUI" and cfg.get("jobs") == 4,
+                "config reads comfyui_root and jobs")
+        c.check(_config.merge("/cli", cfg, "comfyui_root") == "/cli",
+                "config: a CLI value overrides the file")
+        c.check(_config.merge(None, cfg, "comfyui_root") == "/x/ComfyUI",
+                "config: the file supplies the default")
+
+        # --- schema v2: new fields round-trip; v1 omits them ---
+        v41 = Lockfile(
+            version=2, workflow_hash="sha256:" + "a" * 64,
+            environment={"python": "3.12.0", "platform": "linux"},
+            annotations={"author": "t", "tags": ["a", "b"]},
+            pip_requirements=["numpy", "torch==2.1.0"],
+        )
+        rt41 = serialize.loads(serialize.dumps_json(v41))
+        c.check(
+            rt41.workflow_hash == "sha256:" + "a" * 64
+            and rt41.environment["platform"] == "linux"
+            and rt41.annotations["tags"] == ["a", "b"]
+            and rt41.pip_requirements == ["numpy", "torch==2.1.0"],
+            "v0.4.1 schema fields round-trip",
+        )
+        d41v1 = Lockfile(version=1, workflow_hash="sha256:x",
+                         environment={"python": "3"}, pip_requirements=["x"]).to_dict()
+        c.check(
+            "workflow_hash" not in d41v1 and "environment" not in d41v1
+            and "pip" not in d41v1.get("custom_nodes", {}),
+            "v1 output omits v0.4.1 schema fields",
+        )
+        garbage = serialize.loads(json.dumps({
+            "version": 2, "workflow_hash": [1], "environment": "no",
+            "annotations": 9, "custom_nodes": {"pip": "no"},
+        }))
+        c.check(
+            garbage.workflow_hash is None and garbage.environment == {}
+            and garbage.annotations == {} and garbage.pip_requirements == [],
+            "malformed v0.4.1 fields degrade safely",
+        )
+
+        # --- pack: annotations, workflow_hash, pip scan ---
+        ann = parse_annotations(["author=t", "tags=x,y", "vram=24"])
+        c.check(ann["tags"] == ["x", "y"] and ann["vram"] == 24, "annotations parse")
+        wfp = Path(td) / "wfhash.json"
+        wfp.write_text('{"nodes": []}', encoding="utf-8")
+        c.check(workflow_hash(wfp).startswith("sha256:"), "workflow_hash digests the file")
+        piproot = Path(td) / "piproot"
+        nd = piproot / "custom_nodes" / "N"
+        nd.mkdir(parents=True)
+        (nd / "requirements.txt").write_text("torch==2.1.0\n# c\n-r o.txt\n", encoding="utf-8")
+        c.check(scan_pip_requirements(piproot) == ["torch==2.1.0"], "pip requirements scanned")
+
+        # --- enrich: HF/Civitai parsing + recovery URLs ---
+        c.check(
+            _enrich.parse_hf_url("https://huggingface.co/o/r/resolve/main/f.safetensors")
+            == ("o/r", "f.safetensors")
+            and _enrich.parse_civitai_url("https://civitai.com/api/download/models/77")
+            == (None, 77),
+            "enrich parses HF and Civitai URLs",
+        )
+        em = Model("f.bin", hf_repo_id="o/r", hf_filename="f.bin", civitai_version_id=7)
+        c.check(
+            "https://huggingface.co/o/r/resolve/main/f.bin" in _enrich.recovery_urls(em)
+            and "https://civitai.com/api/download/models/7" in _enrich.recovery_urls(em),
+            "enrich reconstructs recovery URLs",
+        )
+
+        # --- sync: status detection + non-mutating update ---
+        slock = Lockfile(git_nodes={"https://github.com/a/b.git": "b" * 40})
+        _new, sres = _sync.sync(
+            slock, ls_remote=lambda u: {"HEAD": "c" * 40, "refs/heads/main": "c" * 40},
+            update_nodes=True,
+        )
+        c.check(
+            sres.nodes[0].status == _sync.DIVERGED and sres.updated == 1
+            and _new.git_nodes["https://github.com/a/b.git"] == "c" * 40
+            and slock.git_nodes["https://github.com/a/b.git"] == "b" * 40,
+            "sync detects divergence and re-pins without mutating the input",
+        )
+
+        # --- audit: static checks + SARIF ---
+        alock41 = Lockfile(
+            git_nodes={"http://1.2.3.4/x/N.git": "a" * 40},
+            models=[Model("m.safetensors", url="http://h/m", paths=["../x"],
+                          hashes=[Hash("CRC32", "deadbeef")], size=500)],
+        )
+        afindings = _audit.static_audit(alock41)
+        aids = {f.rule_id for f in afindings}
+        c.check(
+            {"node-url-http", "node-url-ip", "hash-weak", "path-traversal",
+             "size-small"} <= aids,
+            "static audit flags url/ip/weak-hash/traversal/size",
+        )
+        sarif = json.loads(_audit.to_sarif(afindings))
+        c.check(
+            sarif["version"] == "2.1.0"
+            and sarif["runs"][0]["tool"]["driver"]["name"] == "comfylock"
+            and bool(sarif["runs"][0]["results"]),
+            "audit emits valid SARIF 2.1.0",
+        )
+        c.check(_audit.static_audit(Lockfile()) == [], "static audit clean on an empty lock")
+
+        # --- export: docker-compose structure + injection safety ---
+        dc = _export(Lockfile(git_nodes={"https://github.com/a/b.git": "d\nRUN evil"},
+                              models=[Model("m", paths=["models/loras/m"])]), "docker-compose")
+        c.check(
+            "services:" in dc and "./models:/ComfyUI/models" in dc
+            and not any(ln.strip() == "RUN evil" for ln in dc.splitlines()),
+            "docker-compose export renders and quotes injected values",
+        )
+
+        # --- progress: bar render + disabled is silent ---
+        c.check("[#####-----]" in ProgressBar("x", enabled=False, width=10).render_line(50, 100),
+                "progress bar renders a determinate fill")
+        import io as _io
+        _ps = _io.StringIO()
+        _pb = ProgressBar("x", stream=_ps, enabled=False)
+        _pb.update(5, 10)
+        _pb.finish()
+        c.check(_ps.getvalue() == "", "progress bar is silent when disabled")
+
     total = c.passed + c.failed
     print(f"selftest: {c.passed}/{total} checks passed.")
     return 0 if c.failed == 0 else 1

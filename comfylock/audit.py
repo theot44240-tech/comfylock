@@ -13,7 +13,9 @@ sidecar so repeated CI runs do not hammer the API.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -22,10 +24,202 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .model import Lockfile
+from . import __version__
+from .hashes import STRONG
+from .model import Lockfile, Model
 
 GITHUB_API = "https://api.github.com"
 CACHE_TTL = 3600  # seconds; one hour matches the prompt's "cache for 1 hour".
+
+# SARIF / generic severity levels.
+ERROR = "error"
+WARNING = "warning"
+NOTE = "note"
+
+# TLDs that frequently host throwaway / typo-squat download links. A model URL on
+# one of these is not necessarily malicious, but worth a reviewer's eye (note).
+_SUSPICIOUS_TLDS = {"zip", "mov", "xyz", "top", "click", "country", "gq", "tk"}
+
+
+@dataclass
+class Finding:
+    """One static-audit result (no network)."""
+
+    rule_id: str
+    level: str
+    message: str
+    where: str = ""  # the node/model the finding is about
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rule_id": self.rule_id,
+            "level": self.level,
+            "message": self.message,
+            "where": self.where,
+        }
+
+
+def _host(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    if "@" in host:
+        host = host.split("@", 1)[1]
+    return host.split(":", 1)[0]
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _unsafe_path(value: str) -> bool:
+    """True if a lock-supplied path would be refused by ``unpack`` confinement."""
+    norm = value.replace("\\", "/")
+    if not norm:
+        return False
+    if Path(value).is_absolute() or re.match(r"^[A-Za-z]:", value):
+        return True
+    return ".." in [seg for seg in norm.split("/")]
+
+
+def _audit_url(rule_prefix: str, where: str, url: str, out: list[Finding]) -> None:
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    host = _host(url)
+    if scheme == "http":
+        out.append(Finding(
+            f"{rule_prefix}-http", WARNING,
+            f"insecure http:// URL (use https): {url}", where,
+        ))
+    if host and _is_ip(host):
+        out.append(Finding(
+            f"{rule_prefix}-ip", WARNING,
+            f"URL points to a raw IP address ({host}), not a named host: {url}",
+            where,
+        ))
+    tld = host.rsplit(".", 1)[-1] if "." in host else ""
+    if tld in _SUSPICIOUS_TLDS:
+        out.append(Finding(
+            f"{rule_prefix}-tld", NOTE,
+            f"URL uses an unusual TLD (.{tld}); double-check its provenance: {url}",
+            where,
+        ))
+
+
+def _audit_model(m: Model, out: list[Finding]) -> None:
+    for url in m.urls():
+        _audit_url("model-url", m.name, url, out)
+    # hash strength: a download the lock pins only with a forgeable hash cannot be
+    # cryptographically verified by ``unpack`` (it will refuse to fetch it).
+    if m.hashes and not any(m.hash_of(ht) for ht in STRONG):
+        kinds = ", ".join(sorted({h.type for h in m.hashes}))
+        out.append(Finding(
+            "hash-weak", WARNING,
+            f"model is pinned only with weak hash(es) [{kinds}]; add SHA256 so "
+            f"unpack can verify it: {m.name}", m.name,
+        ))
+    # path traversal: would be refused by unpack's confinement.
+    for p in m.paths:
+        if _unsafe_path(p):
+            out.append(Finding(
+                "path-traversal", ERROR,
+                f"model path escapes the ComfyUI root and would be refused by "
+                f"unpack: {p}", m.name,
+            ))
+    # size anomaly: a checkpoint is rarely < 1 MB.
+    if m.size is not None and 0 < m.size < 1_000_000:
+        out.append(Finding(
+            "size-small", WARNING,
+            f"recorded size is {m.size} bytes (< 1 MB) -- suspiciously small for "
+            f"a model: {m.name}", m.name,
+        ))
+
+
+def static_audit(lock: Lockfile) -> list[Finding]:
+    """Offline security checks over a lockfile (no network).
+
+    Covers URL safety (http/IP/odd TLD), hash strength, path traversal, and size
+    anomalies. Network checks (GitHub advisories) live in :func:`audit_lock`.
+    """
+    out: list[Finding] = []
+    for url in sorted(lock.git_nodes):
+        _audit_url("node-url", url, url, out)
+        name = url.rstrip("/").replace("\\", "/").split("/")[-1]
+        if _unsafe_path(name):
+            out.append(Finding(
+                "node-path", ERROR,
+                f"custom-node URL maps to an unsafe directory name: {url}", url,
+            ))
+    for fn in lock.file_nodes:
+        if _unsafe_path(fn.filename):
+            out.append(Finding(
+                "node-path", ERROR,
+                f"file-node name escapes custom_nodes/ and would be refused: "
+                f"{fn.filename}", fn.filename,
+            ))
+    for m in sorted(lock.models, key=lambda m: m.name.lower()):
+        _audit_model(m, out)
+    return out
+
+
+def sarif_run(findings: list[Finding]) -> dict[str, Any]:
+    """Build the single SARIF 2.1.0 ``run`` object for ``findings``."""
+    rule_ids = sorted({f.rule_id for f in findings})
+    rules = [
+        {"id": rid, "name": rid, "shortDescription": {"text": rid}}
+        for rid in rule_ids
+    ]
+    results = [
+        {
+            "ruleId": f.rule_id,
+            "level": f.level,
+            "message": {"text": f.message},
+            "locations": (
+                [{"logicalLocations": [{"fullyQualifiedName": f.where}]}]
+                if f.where else []
+            ),
+        }
+        for f in findings
+    ]
+    return {
+        "tool": {
+            "driver": {
+                "name": "comfylock",
+                "informationUri": "https://github.com/theot44240-tech/comfylock",
+                "version": __version__,
+                "rules": rules,
+            }
+        },
+        "results": results,
+    }
+
+
+def to_sarif(findings: list[Finding]) -> str:
+    """A SARIF 2.1.0 document for GitHub Code Scanning / VS Code."""
+    doc = {
+        "version": "2.1.0",
+        "$schema": (
+            "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/"
+            "Schemas/sarif-schema-2.1.0.json"
+        ),
+        "runs": [sarif_run(findings)],
+    }
+    return json.dumps(doc, indent=2) + "\n"
+
+
+def render_static(findings: list[Finding]) -> str:
+    """Human-readable text for static findings."""
+    if not findings:
+        return "audit: no static issues found."
+    glyph = {ERROR: "XX", WARNING: "!!", NOTE: " -"}
+    lines = [f"{glyph.get(f.level, '  ')} [{f.rule_id}] {f.message}" for f in findings]
+    n_err = sum(1 for f in findings if f.level == ERROR)
+    n_warn = sum(1 for f in findings if f.level == WARNING)
+    n_note = sum(1 for f in findings if f.level == NOTE)
+    lines.append(f"\naudit: {n_err} error(s), {n_warn} warning(s), {n_note} note(s).")
+    return "\n".join(lines)
 
 
 class RateLimited(RuntimeError):

@@ -568,11 +568,34 @@ class InitTests(unittest.TestCase):
         self.assertTrue(all(isinstance(p, Path) for p in roots))
         self.assertTrue(any(p.name == "ComfyUI" for p in roots))
 
-    def test_non_interactive_returns_2(self):
+    def test_non_interactive_writes_config(self):
+        # v0.4.1: a non-interactive init now writes a comfylock.toml and returns 0.
         fake = mock.Mock()
         fake.isatty.return_value = False
-        with mock.patch("sys.stdin", fake):
-            self.assertEqual(run_init(), 2)
+        with tempfile.TemporaryDirectory() as td:
+            cwd = os.getcwd()
+            os.chdir(td)
+            try:
+                with mock.patch("sys.stdin", fake):
+                    rc = run_init(comfyui_root=str(Path(td) / "ComfyUI"))
+                self.assertEqual(rc, 0)
+                self.assertTrue((Path(td) / "comfylock.toml").is_file())
+            finally:
+                os.chdir(cwd)
+
+    def test_non_interactive_no_root_returns_2(self):
+        fake = mock.Mock()
+        fake.isatty.return_value = False
+        with tempfile.TemporaryDirectory() as td:
+            cwd = os.getcwd()
+            os.chdir(td)
+            try:
+                with mock.patch("sys.stdin", fake), mock.patch(
+                    "comfylock.init.candidate_roots", return_value=[]
+                ):
+                    self.assertEqual(run_init(), 2)
+            finally:
+                os.chdir(cwd)
 
 
 if __name__ == "__main__":

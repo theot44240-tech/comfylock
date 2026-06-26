@@ -1,0 +1,52 @@
+name: "🧪 Model compatibility report"
+description: "Tell us which hash type worked (or failed) for a specific model — this feeds a community compatibility database."
+title: "[model-compat] <model name>"
+labels: ["model-compat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping map model hashing across the ecosystem! This is unique
+        to ComfyLock — your report helps the next person pin the same model cleanly.
+  - type: input
+    id: model_name
+    attributes:
+      label: Model name (filename)
+      placeholder: "sd_xl_base_1.0.safetensors"
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: Where the model came from (HuggingFace repo, Civitai URL, etc.)
+      placeholder: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: worked
+    attributes:
+      label: Which hash types worked?
+      multiple: true
+      options:
+        - SHA256
+        - AutoV2
+        - AutoV1
+        - BLAKE3
+        - BLAKE2B
+        - CRC32
+    validations:
+      required: true
+  - type: textarea
+    id: failed
+    attributes:
+      label: Which hash types failed or mismatched (and how)?
+      placeholder: "AutoV1 gave a different value than Civitai showed; SHA256 matched fine."
+  - type: input
+    id: version
+    attributes:
+      label: ComfyLock version
+      description: "`comfy-lock --version`"
+      placeholder: "0.4.1"
+    validations:
+      required: true

@@ -8,6 +8,7 @@ dispatches by format name.
 from __future__ import annotations
 
 from ..model import Lockfile
+from .docker_compose import to_docker_compose
 from .dockerfile import to_dockerfile
 from .json_schema import to_json_schema
 from .manager_snapshot import to_manager_snapshot
@@ -19,6 +20,7 @@ FORMATS = (
     "markdown",
     "manager-snapshot",
     "dockerfile",
+    "docker-compose",
     "json-schema",
     "shell",
     "requirements",
@@ -32,6 +34,8 @@ def export(lock: Lockfile, fmt: str) -> str:
         return to_manager_snapshot(lock)
     if fmt == "dockerfile":
         return to_dockerfile(lock)
+    if fmt == "docker-compose":
+        return to_docker_compose(lock)
     if fmt == "json-schema":
         return to_json_schema()
     if fmt == "shell":
@@ -47,6 +51,7 @@ __all__ = [
     "to_markdown",
     "to_manager_snapshot",
     "to_dockerfile",
+    "to_docker_compose",
     "to_json_schema",
     "to_shell",
     "to_requirements",

@@ -1,0 +1,33 @@
+name: Stale
+on:
+  schedule:
+    - cron: "0 6 * * *"   # daily, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: "pinned,security,model-compat,keep"
+          exempt-pr-labels: "pinned,security,keep"
+          stale-issue-message: >
+            This issue has had no activity for 60 days and is now marked stale.
+            If it's still relevant, drop a comment and we'll keep it open — otherwise
+            it'll close in 14 days. For general questions, please use
+            [Discussions](https://github.com/theot44240-tech/comfylock/discussions). Thanks!
+          stale-pr-message: >
+            This PR has had no activity for 60 days and is now marked stale.
+            Comment or push to keep it open; otherwise it'll close in 14 days.
+          close-issue-message: >
+            Closing as stale — thanks for the report. Comment to reopen if it's
+            still happening on the latest release.
