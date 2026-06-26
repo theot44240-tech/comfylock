@@ -49,7 +49,9 @@ class ConfigTests(unittest.TestCase):
             sub = root / "a" / "b"
             sub.mkdir(parents=True)
             found = config.find_config(sub)
-            self.assertEqual(found, root / "comfylock.toml")
+            # compare resolved forms: find_config resolves, and on Windows a temp
+            # dir can surface in 8.3 short form (RUNNER~1) before resolution.
+            self.assertEqual(found, (root / "comfylock.toml").resolve())
 
     def test_reads_known_keys_only(self):
         with tempfile.TemporaryDirectory() as td:
