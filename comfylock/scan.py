@@ -92,6 +92,40 @@ def scan_custom_nodes(root: str | Path) -> tuple[dict[str, str], list[FileNode]]
     return git_nodes, file_nodes
 
 
+def scan_pip_requirements(root: str | Path) -> list[str]:
+    """Collect pinned pip requirements from ``custom_nodes/*/requirements.txt``.
+
+    Returns a sorted, de-duplicated list of requirement specifiers. Blank lines,
+    comments and ``-r``/``-e`` include directives are skipped (they are not simple
+    package pins). Used to populate ``custom_nodes.pip`` in a v2 lock so ``verify``
+    can warn about, and ``unpack --install-pip`` can install, the Python deps a
+    workflow's nodes need.
+    """
+    root = Path(root)
+    cn = root / "custom_nodes"
+    reqs: set[str] = set()
+    if not cn.is_dir():
+        return []
+    for entry in sorted(cn.iterdir(), key=lambda p: p.name.lower()):
+        if not entry.is_dir() or entry.name == "__pycache__":
+            continue
+        req_file = entry / "requirements.txt"
+        if not req_file.is_file():
+            continue
+        try:
+            text = req_file.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+        for line in text.splitlines():
+            spec = line.strip()
+            if not spec or spec.startswith("#") or spec.startswith("-"):
+                continue
+            spec = spec.split("#", 1)[0].strip()
+            if spec:
+                reqs.add(spec)
+    return sorted(reqs)
+
+
 class LocatedModels(NamedTuple):
     """Result of :func:`locate_models`.
 

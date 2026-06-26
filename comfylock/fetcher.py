@@ -23,6 +23,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
+from .progress import ProgressBar
+
 try:  # optional [hf] extra
     from huggingface_hub import hf_hub_download  # type: ignore
 
@@ -99,7 +101,8 @@ def _hf_download(url: str, dest: Path) -> None:
     dest.write_bytes(data)
 
 
-def _render_progress(done: int, total: int) -> None:
+def _render_progress(done: int, total: int) -> None:  # pragma: no cover - legacy shim
+    """Kept for backward compatibility; the bar in :mod:`progress` is preferred."""
     if total <= 0:
         sys.stderr.write(f"\r  {done / 1_000_000:.1f} MB")
     else:
@@ -155,6 +158,7 @@ def http_download(
     total = (int(length_header) + start) if length_header and length_header.isdigit() else 0
 
     done = start
+    bar = ProgressBar(dest.name) if progress else None
     with resp, open(dest, mode) as f:
         while True:
             block = resp.read(chunk)
@@ -162,11 +166,10 @@ def http_download(
                 break
             f.write(block)
             done += len(block)
-            if progress:
-                _render_progress(done, total)
-    if progress:
-        sys.stderr.write("\n")
-        sys.stderr.flush()
+            if bar is not None:
+                bar.update(done, total)
+    if bar is not None:
+        bar.finish("done")
 
 
 def download(

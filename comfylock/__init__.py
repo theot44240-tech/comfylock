@@ -4,7 +4,7 @@
 workflow parameters into one small, portable, verifiable lockfile.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 from .model import SCHEMA_VERSION, FileNode, Hash, Lockfile, Model  # noqa: E402
 

@@ -122,7 +122,7 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(payload["command"], "audit")
         self.assertEqual(payload["status"], "error")
-        self.assertEqual(payload["data"]["advisory_count"], 1)
+        self.assertEqual(payload["data"]["advisories"]["advisory_count"], 1)
 
     def test_advisory_from_api_tolerant(self):
         a = Advisory.from_api({})

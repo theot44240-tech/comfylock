@@ -1,0 +1,20 @@
+# Config for actions/labeler@v5 — auto-label PRs by the files they touch.
+core:
+  - changed-files:
+      - any-glob-to-any-file: ["comfylock/**"]
+
+panel:
+  - changed-files:
+      - any-glob-to-any-file: ["panel/**"]
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: ["tests/**"]
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ["README.md", "CHANGELOG.md", "docs/**", "discussions/**"]
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/**"]

@@ -188,6 +188,30 @@ class Lockfile:
     comfylock_version: str | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
     thumbnail: str | None = None
+    workflow_hash: str | None = None
+    environment: dict[str, Any] = field(default_factory=dict)
+    annotations: dict[str, Any] = field(default_factory=dict)
+    pip_requirements: list[str] = field(default_factory=list)
+
+    def copy(self) -> Lockfile:
+        """A deep-enough copy (containers duplicated; dataclass leaves shared)."""
+        return Lockfile(
+            workflow=self.workflow,
+            comfyui=self.comfyui,
+            generated=self.generated,
+            git_nodes=dict(self.git_nodes),
+            file_nodes=list(self.file_nodes),
+            models=list(self.models),
+            parameters=dict(self.parameters),
+            version=self.version,
+            comfylock_version=self.comfylock_version,
+            provenance=dict(self.provenance),
+            thumbnail=self.thumbnail,
+            workflow_hash=self.workflow_hash,
+            environment=dict(self.environment),
+            annotations=dict(self.annotations),
+            pip_requirements=list(self.pip_requirements),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict with deterministic ordering.
@@ -200,10 +224,16 @@ class Lockfile:
         d: dict[str, Any] = {"version": self.version}
         if self.workflow:
             d["workflow"] = self.workflow
+        if v2 and self.workflow_hash:
+            d["workflow_hash"] = self.workflow_hash
         if self.generated:
             d["generated"] = self.generated
         if v2 and self.comfylock_version:
             d["comfylock_version"] = self.comfylock_version
+        if v2 and self.environment:
+            d["environment"] = {k: self.environment[k] for k in sorted(self.environment)}
+        if v2 and self.annotations:
+            d["annotations"] = {k: self.annotations[k] for k in sorted(self.annotations)}
         if v2 and self.provenance:
             d["provenance"] = self.provenance
         if self.comfyui:
@@ -215,6 +245,8 @@ class Lockfile:
             custom["files"] = [
                 fn.to_dict() for fn in sorted(self.file_nodes, key=lambda f: f.filename)
             ]
+        if v2 and self.pip_requirements:
+            custom["pip"] = sorted(self.pip_requirements)
         if custom:
             d["custom_nodes"] = custom
         if self.models:
@@ -244,6 +276,12 @@ class Lockfile:
             for f in (raw_files if isinstance(raw_files, list) else [])
             if isinstance(f, dict)
         ]
+        raw_pip = custom.get("pip", []) or []
+        pip_requirements = [
+            str(r)
+            for r in (raw_pip if isinstance(raw_pip, list) else [])
+            if isinstance(r, str) and r
+        ]
         raw_models = d.get("models", []) or []
         models = [
             Model.from_dict(m)
@@ -257,6 +295,11 @@ class Lockfile:
         provenance = dict(raw_prov) if isinstance(raw_prov, dict) else {}
         clv = d.get("comfylock_version")
         thumb = d.get("thumbnail")
+        wf_hash = d.get("workflow_hash")
+        raw_env = d.get("environment", {}) or {}
+        environment = dict(raw_env) if isinstance(raw_env, dict) else {}
+        raw_ann = d.get("annotations", {}) or {}
+        annotations = dict(raw_ann) if isinstance(raw_ann, dict) else {}
         return Lockfile(
             version=version if version is not None else SCHEMA_VERSION,
             workflow=d.get("workflow"),
@@ -269,4 +312,8 @@ class Lockfile:
             comfylock_version=str(clv) if isinstance(clv, str) and clv else None,
             provenance=provenance,
             thumbnail=str(thumb) if isinstance(thumb, str) and thumb else None,
+            workflow_hash=str(wf_hash) if isinstance(wf_hash, str) and wf_hash else None,
+            environment=environment,
+            annotations=annotations,
+            pip_requirements=pip_requirements,
         )

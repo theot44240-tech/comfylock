@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import fetcher
+from .enrich import download_candidates
 from .hashes import STRONG, compute
 from .model import Lockfile, Model
 from .scan import git, head_commit, is_git_repo, is_within
@@ -239,11 +240,12 @@ def _model_present(root: Path, m: Model) -> bool:
 
 
 def _plan_model(root: Path, m: Model) -> Action | None:
-    if not m.url:
+    if not download_candidates(m):
         return Action("skip", m.name, "no url in lock", error="no url")
     dest = m.paths[0] if m.paths else _default_dest(m)
     if not _within(root, root / dest):
         return Action("skip", m.name, f"unsafe path: {dest}", error="unsafe path")
+    primary = m.url or download_candidates(m)[0]
     # Never auto-fetch what we can't verify. An untrusted lock that supplies a
     # URL but no recomputable hash would have its download accepted with zero
     # integrity guarantee -- a MITM or a swapped artifact goes undetected -- and
@@ -254,7 +256,7 @@ def _plan_model(root: Path, m: Model) -> Action | None:
     # that carry no strong hash -- e.g. only a forgeable AutoV2/CRC32/AutoV1.)
     if _verifiable_ht(m) is None:
         return Action("skip", m.name, "no strong hash to verify download", error="no hash")
-    return Action("download", m.name, f"{m.url} -> {dest}")
+    return Action("download", m.name, f"{primary} -> {dest}")
 
 
 def _do_clone(url: str, node_dir: Path, commit: str, act: Action) -> None:
@@ -280,7 +282,7 @@ def _do_checkout(node_dir: Path, commit: str, act: Action) -> None:
 
 
 def _do_download(root: Path, m: Model, act: Action) -> None:
-    urls = m.urls()  # primary URL first, then any v2 mirrors
+    urls = download_candidates(m)  # primary, mirrors, then HF/Civitai recovery URLs
     if not urls:
         act.error = "no url"
         return

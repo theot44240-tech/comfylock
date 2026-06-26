@@ -50,8 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pack.add_argument("--no-cache", action="store_true", help="Disable the hash cache.")
     p_pack.add_argument(
-        "--lock-version", type=int, choices=(1, 2), default=SCHEMA_VERSION,
-        help="Lockfile schema version to write (default: %(default)s).",
+        "--lock-version", "--schema-version", type=int, choices=(1, 2),
+        default=None, dest="lock_version",
+        help="Lockfile schema version to write (default: 2).",
     )
     p_pack.add_argument(
         "--strict", action="store_true",
@@ -60,6 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack.add_argument(
         "--provenance", action="store_true",
         help="Record opt-in author/machine metadata (v2 only; not reproducible).",
+    )
+    p_pack.add_argument(
+        "--annotate", action="append", default=None, metavar="KEY=VALUE",
+        help="Attach metadata to the lock (v2). Repeatable. tags=a,b makes a list.",
+    )
+    p_pack.add_argument(
+        "--enrich", action="append", default=None, metavar="SOURCE",
+        help="Extract canonical refs from model URLs: hf, civitai, or all. Repeatable.",
     )
     _add_common(p_pack)
 
@@ -88,10 +97,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_unpack.add_argument("--apply", action="store_true", help="Actually perform actions (default is a dry run).")
     p_unpack.add_argument("--no-models", action="store_true", help="Do not download models.")
     p_unpack.add_argument(
-        "--jobs", type=int, default=1, metavar="N",
+        "--jobs", type=int, default=None, metavar="N",
         help="Download up to N models in parallel (default: 1).",
     )
     _add_common(p_unpack)
+
+    # --- sync ---
+    p_sync = sub.add_parser(
+        "sync", help="Check pinned node commits against their upstream remotes."
+    )
+    p_sync.add_argument("lock", help="Path to the lockfile.")
+    p_sync.add_argument(
+        "--check-only", action="store_true",
+        help="Exit non-zero if any node is behind (for CI), writing nothing.",
+    )
+    p_sync.add_argument(
+        "--update-nodes", action="store_true",
+        help="Re-pin behind nodes to their current remote HEAD.",
+    )
+    p_sync.add_argument(
+        "--yes", action="store_true",
+        help="Apply updates without the interactive confirmation.",
+    )
+    p_sync.add_argument("-o", "--out", default=None, help="Write the updated lock here.")
+    p_sync.add_argument(
+        "--in-place", action="store_true", help="Overwrite the input lock with updates.",
+    )
+    p_sync.add_argument(
+        "--json", action="store_true", help="Emit a machine-readable JSON result."
+    )
 
     # --- diff ---
     p_diff = sub.add_parser("diff", help="Show semantic changes between two lockfiles.")
@@ -166,7 +200,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_sign.add_argument("--sigstore", action="store_true", help="Use Sigstore keyless signing (extra).")
 
     # --- init ---
-    sub.add_parser("init", help="Interactive setup wizard.")
+    p_init = sub.add_parser("init", help="Interactive setup wizard + comfylock.toml.")
+    p_init.add_argument(
+        "--comfyui-root", "-r", default=None, help="ComfyUI root to record in config.",
+    )
+    p_init.add_argument(
+        "--non-interactive", action="store_true",
+        help="Write a default comfylock.toml without prompting.",
+    )
 
     # --- completions ---
     from .completions import SHELLS
@@ -188,7 +229,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bypass the 1-hour advisory cache and always query the API.",
     )
     p_audit.add_argument(
-        "--json", action="store_true", help="Emit a machine-readable JSON result."
+        "--format", choices=("text", "json", "sarif"), default="text",
+        help="Output format (default: text). sarif = GitHub Code Scanning.",
+    )
+    p_audit.add_argument(
+        "--no-advisories", action="store_true",
+        help="Skip the network advisory scan; run only offline static checks.",
+    )
+    p_audit.add_argument(
+        "--strict", action="store_true",
+        help="Exit 1 if any static finding (warning or worse) is reported.",
+    )
+    p_audit.add_argument(
+        "--json", action="store_true", help="Alias of --format json (back-compat)."
     )
 
     # --- hash ---
@@ -228,17 +281,36 @@ def _cache(disabled: bool, root: str | None) -> HashCache | None:
     return HashCache(base / DEFAULT_CACHE)
 
 
+def _config() -> dict:
+    from .config import load_config
+
+    return load_config()
+
+
 def cmd_pack(args: argparse.Namespace) -> int:
-    cache_path = None if args.no_cache else (Path(args.comfyui_root or ".") / DEFAULT_CACHE)
+    from .config import merge
+    from .enrich import resolve_sources
+    from .pack import parse_annotations
+
+    cfg = _config()
+    root = merge(args.comfyui_root, cfg, "comfyui_root")
+    hash_types = merge(args.hash, cfg, "hash")
+    enrich_raw = merge(args.enrich, cfg, "enrich")
+    lock_version = args.lock_version
+    if lock_version is None:
+        lock_version = cfg.get("schema_version", SCHEMA_VERSION)
+    cache_path = None if args.no_cache else (Path(root or ".") / DEFAULT_CACHE)
     out = do_pack(
         args.workflow,
         out_path=args.out,
-        comfyui_root=args.comfyui_root,
-        hash_types=args.hash,
+        comfyui_root=root,
+        hash_types=hash_types,
         cache_path=cache_path,
-        lock_version=args.lock_version,
+        lock_version=int(lock_version),
         strict=args.strict,
         provenance=args.provenance,
+        annotations=parse_annotations(args.annotate),
+        enrich=resolve_sources(enrich_raw),
     )
     print(f"Wrote {out}")
     return 0
@@ -262,12 +334,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
         sig_note = msg
         if not args.json:
             print(f"signature: {msg}")
+    from .config import merge
+
+    root = merge(args.comfyui_root, _config(), "comfyui_root")
     lock = serialize.read(args.lock)
     report = do_verify(
         lock,
-        comfyui_root=args.comfyui_root,
+        comfyui_root=root,
         check_hashes=not args.no_hash,
-        cache=_cache(args.no_cache, args.comfyui_root),
+        cache=_cache(args.no_cache, root),
     )
     strict_fail = bool(args.strict and report.n_warnings)
     if args.json:
@@ -302,21 +377,60 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_unpack(args: argparse.Namespace) -> int:
-    if args.comfyui_root is None:
+    from .config import merge
+
+    cfg = _config()
+    root = merge(args.comfyui_root, cfg, "comfyui_root")
+    if root is None:
         print("error: --comfyui-root is required for unpack.", file=sys.stderr)
         return 2
+    jobs = args.jobs if args.jobs is not None else int(cfg.get("jobs", 1) or 1)
     lock = serialize.read(args.lock)
     result = do_unpack(
         lock,
-        comfyui_root=args.comfyui_root,
+        comfyui_root=root,
         dry_run=not args.apply,
         download_models=not args.no_models,
-        jobs=max(1, args.jobs),
+        jobs=max(1, jobs),
     )
     print(result.render())
     if not args.apply:
         print("\n(dry run - re-run with --apply to perform these actions)")
     return 1 if result.errors else 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    from .sync import sync as do_sync
+
+    lock = serialize.read(args.lock)
+    do_update = bool(args.update_nodes) and not args.check_only
+    new_lock, result = do_sync(lock, update_nodes=do_update)
+
+    if args.json:
+        from .jsonout import OK, WARNING, Result
+
+        status = WARNING if result.behind else OK
+        print(Result("sync", status, result.to_dict()).dumps())
+    else:
+        print(result.render())
+
+    # Write the updated lock if any pins changed and a destination is set.
+    if do_update and result.updated:
+        dest = args.out or (args.lock if args.in_place else None)
+        if dest:
+            if dest != args.out and not args.yes and sys.stdin.isatty():
+                answer = input(f"\nOverwrite {dest} with {result.updated} update(s)? [y/N] ")
+                if answer.strip().lower() != "y":
+                    print("Aborted; nothing written.", file=sys.stderr)
+                    return 0
+            serialize.write(new_lock, dest)
+            print(f"Wrote {dest}")
+        elif not args.json:
+            print("\n(re-run with -o <file> or --in-place to save updated pins)")
+
+    if args.check_only and not result.all_current:
+        return 1
+    return 0
 
 
 def cmd_diff(args: argparse.Namespace) -> int:
@@ -439,10 +553,12 @@ def cmd_sign(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_init(_args: argparse.Namespace) -> int:
+def cmd_init(args: argparse.Namespace) -> int:
     from .init import run_init
 
-    return run_init()
+    return run_init(
+        comfyui_root=args.comfyui_root, non_interactive=args.non_interactive
+    )
 
 
 def cmd_completions(args: argparse.Namespace) -> int:
@@ -453,26 +569,57 @@ def cmd_completions(args: argparse.Namespace) -> int:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    from .audit import audit_lock
+    from .audit import (
+        ERROR as A_ERROR,
+    )
+    from .audit import (
+        WARNING as A_WARNING,
+    )
+    from .audit import (
+        audit_lock,
+        render_static,
+        static_audit,
+        to_sarif,
+    )
 
     lock = serialize.read(args.lock)
-    cache_path = None if args.no_cache else (Path(".") / ".comfylock-audit-cache.json")
-    result = audit_lock(lock, cache_path=cache_path)
-    failing = args.fail_on_advisory and result.has_advisories
-    if args.json:
+    findings = static_audit(lock)
+    fmt = "json" if args.json else args.format
+
+    # Offline static findings are the SARIF surface; advisories are the network part.
+    advisories = None
+    if not args.no_advisories:
+        cache_path = None if args.no_cache else (Path(".") / ".comfylock-audit-cache.json")
+        advisories = audit_lock(lock, cache_path=cache_path)
+
+    n_err = sum(1 for f in findings if f.level == A_ERROR)
+    n_warn = sum(1 for f in findings if f.level == A_WARNING)
+    adv_failing = bool(args.fail_on_advisory and advisories and advisories.has_advisories)
+    strict_failing = bool(args.strict and (n_err or n_warn))
+
+    if fmt == "sarif":
+        sys.stdout.write(to_sarif(findings))
+    elif fmt == "json":
         from .jsonout import ERROR, OK, WARNING, Result
 
-        errors = [f"{result.advisory_count} advisory(ies) found"] if failing else []
-        if errors:
-            status = ERROR
-        elif result.has_advisories or result.warnings:
-            status = WARNING
-        else:
-            status = OK
-        print(Result("audit", status, result.to_dict(), errors, list(result.warnings)).dumps())
+        data: dict = {"findings": [f.to_dict() for f in findings]}
+        if advisories is not None:
+            data["advisories"] = advisories.to_dict()
+        errs = [f.message for f in findings if f.level == A_ERROR]
+        warns = [f.message for f in findings if f.level == A_WARNING]
+        if advisories is not None:
+            warns += list(advisories.warnings)
+        status = ERROR if (errs or adv_failing or strict_failing) else (
+            WARNING if (warns or (advisories and advisories.has_advisories)) else OK
+        )
+        print(Result("audit", status, data, errs, warns).dumps())
     else:
-        print(result.render())
-    return 1 if failing else 0
+        print(render_static(findings))
+        if advisories is not None:
+            print()
+            print(advisories.render())
+
+    return 1 if (adv_failing or strict_failing) else 0
 
 
 def cmd_hash(args: argparse.Namespace) -> int:
@@ -544,6 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         "pack": cmd_pack,
         "verify": cmd_verify,
         "unpack": cmd_unpack,
+        "sync": cmd_sync,
         "diff": cmd_diff,
         "inspect": cmd_inspect,
         "export": cmd_export,

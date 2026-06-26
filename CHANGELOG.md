@@ -5,6 +5,53 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-06-26
+
+### Added
+
+- `comfy-lock sync <lock>` — check every pinned git custom node against its
+  upstream remote with a single `git ls-remote` per repo (no clone). Reports
+  `up-to-date` / `update-available` / `diverged` / `unreachable`; `--check-only`
+  exits non-zero for CI when anything is behind; `--update-nodes` re-pins behind
+  nodes to their current remote HEAD and writes a new lock (`-o` / `--in-place`,
+  never mutating in place without an explicit flag). `--json` supported.
+- `comfy-lock audit` extended with **offline static security checks** (no
+  network): insecure `http://` URLs, raw-IP hosts, unusual TLDs, weak-only model
+  hashes, path-traversal entries that `unpack` would refuse, and suspiciously
+  small (< 1 MB) model sizes. `--format text|json|sarif` (SARIF 2.1.0 for GitHub
+  Code Scanning), `--strict` turns any finding into exit 1, `--no-advisories`
+  skips the network advisory scan. The existing GitHub-advisory scan is unchanged.
+- `export --format docker-compose` — a `docker-compose.yml` with model/`custom_nodes`
+  volume mounts, the pinned core commit as metadata, and a commented, shell-quoted
+  block of node-install commands (opt-in, like the Dockerfile exporter).
+- Lock **schema v2** gains `workflow_hash` (sha256 of the source workflow file),
+  `environment` (Python version + platform), `annotations` (`pack --annotate
+  key=value`, with `tags=a,b` becoming a list), and `custom_nodes.pip` (pinned
+  pip requirements collected from each node's `requirements.txt`). All optional
+  and backward-compatible; `--schema-version 1` still emits a v1 lock.
+- `pack --enrich hf|civitai|all` — extract canonical, durable references
+  (HuggingFace `repo`/`file`, Civitai `model_id`/`version_id`) from a model's
+  URLs. `unpack` uses them to reconstruct a download URL when the original 404s
+  ("dead URL recovery"). Opt-in and zero-network (parses URLs already in the lock).
+- `comfylock.toml` project config (`[comfylock]` table): `pack` / `verify` /
+  `unpack` read `comfyui_root`, `hash` / `default_hash`, `jobs`, `enrich` and
+  `schema_version` from the nearest config in the current dir or an ancestor
+  (like `git`). CLI flags always override the file. Pure stdlib (uses `tomllib`
+  on 3.11+, a tiny built-in reader on 3.9/3.10).
+- `comfylock/progress.py` — a dependency-free progress bar/spinner on **stderr**
+  that respects `NO_COLOR`, `CI`, and non-TTY streams (so `pack … | jq .` stays
+  clean). Wired into model downloads.
+- `comfy-lock init` now writes a `comfylock.toml` (and adds the hash cache to
+  `.gitignore`), with a `--non-interactive` mode and `--comfyui-root`.
+- GitHub repo health: model-compatibility issue template, PR auto-labeler,
+  stale-issue automation, and ready-to-post Discussions starters.
+- 250+ tests (up from 205) and 87 selftest checks.
+
+### Changed
+
+- Version bumped to 0.4.1 (`pyproject.toml`, `comfylock/__init__.py`, README).
+- `pack --schema-version` accepted as an alias of `--lock-version`.
+
 ## [0.4.0] - 2026-06-24
 
 ### Added
